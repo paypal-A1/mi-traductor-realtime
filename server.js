@@ -13,9 +13,8 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-let activeCallSid = null; // ID de la llamada telefónica activa
+let activeCallSid = null;
 
-// Endpoint TwiML para enlazar el audio de Twilio
 app.post('/twiml', (req, res) => {
     res.type('text/xml');
     res.send(`
@@ -27,7 +26,6 @@ app.post('/twiml', (req, res) => {
     `);
 });
 
-// Endpoint para iniciar la llamada desde tu interfaz web
 app.post('/make-call', async (req, res) => {
     const { toPhoneNumber } = req.body;
     try {
@@ -44,7 +42,6 @@ app.post('/make-call', async (req, res) => {
     }
 });
 
-// Endpoint para colgar la llamada
 app.post('/hangup', async (req, res) => {
     try {
         if (activeCallSid) {
@@ -60,22 +57,24 @@ app.post('/hangup', async (req, res) => {
     }
 });
 
-const server = app.listen(PORT, () => console.log(`Servidor de traducción corriendo en puerto ${PORT}`));
+const server = app.listen(PORT, () => console.log(`Servidor de traducción diagnóstica corriendo en puerto ${PORT}`));
 const wss = new WebSocket.Server({ server });
 
-// DECLARACIÓN DE LAS DOS MICRO-SESIONES DE OPENAI
-let openAIWsToEnglish = null; // Escucha tu navegador (Español) -> Traduce al Inglés -> Va al Teléfono
-let openAIWsToSpanish = null; // Escucha el Teléfono (Inglés) -> Traduce al Español -> Va a tu Navegador
+let openAIWsToEnglish = null; 
+let openAIWsToSpanish = null; 
 
 let twilioWs = null;
 let browserWs = null;
 let twilioStreamSid = null;
 
-// CANAL 1: Inicializa el traductor dedicado al INGLÉS (Para tu micrófono)
+// CONTADORES DE DIAGNÓSTICO (Para saber si viaja audio binario)
+let browserPacketsIn = 0;
+let twilioPacketsIn = 0;
+
 function initOpenAIToEnglish() {
     if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) return;
 
-    console.log('Conectando a OpenAI [Canal Español ➡️ Inglés]...');
+    console.log('Conectando a OpenAI [Canal Español ➡️ Inglés]... 🇺🇸');
     
     openAIWsToEnglish = new WebSocket('wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate', {
         headers: {
@@ -86,7 +85,6 @@ function initOpenAIToEnglish() {
 
     openAIWsToEnglish.on('open', () => {
         console.log('✅ OpenAI [Canal Inglés] conectado con éxito.');
-        // Forzamos a que este canal solo devuelva INGLÉS
         openAIWsToEnglish.send(JSON.stringify({
             type: "session.update",
             session: { audio: { output: { language: "en" } } }
@@ -98,7 +96,15 @@ function initOpenAIToEnglish() {
             const response = JSON.parse(message);
             if (response.type === 'error') console.error('❌ [ERROR OPENAI EN]:', response.error);
 
-            // El audio traducido al INGLÉS va directo a la bocina del teléfono (Twilio)
+            // DIAGNÓSTICO DE TEXTO: ¿Qué está entendiendo OpenAI de tu micrófono?
+            if (response.type === 'session.input_transcript.delta') {
+                process.stdout.write(`🎙️ [Tu Micrófono dice]: ${response.delta}\n`);
+            }
+            if (response.type === 'session.output_transcript.delta') {
+                process.stdout.write(`🇺🇸 [Traducción al Inglés generada]: ${response.delta}\n`);
+            }
+
+            // Flujo de audio hacia Twilio
             if (response.type === 'session.output_audio.delta' && response.delta) {
                 if (twilioWs && twilioWs.readyState === WebSocket.OPEN && twilioStreamSid) {
                     twilioWs.send(JSON.stringify({ 
@@ -113,15 +119,14 @@ function initOpenAIToEnglish() {
         }
     });
 
-    openAIWsToEnglish.on('close', () => { openAIWsToEnglish = null; });
+    openAIWsToEnglish.on('close', () => { console.log('🔌 Canal Inglés Cerrado.'); openAIWsToEnglish = null; });
     openAIWsToEnglish.on('error', (err) => console.error('Error Canal Inglés:', err));
 }
 
-// CANAL 2: Inicializa el traductor dedicado al ESPAÑOL (Para el teléfono del proveedor)
 function initOpenAIToSpanish() {
     if (openAIWsToSpanish && openAIWsToSpanish.readyState === WebSocket.OPEN) return;
 
-    console.log('Conectando a OpenAI [Canal Inglés ➡️ Español]...');
+    console.log('Conectando a OpenAI [Canal Inglés ➡️ Español]... 🇪🇸');
     
     openAIWsToSpanish = new WebSocket('wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate', {
         headers: {
@@ -132,7 +137,6 @@ function initOpenAIToSpanish() {
 
     openAIWsToSpanish.on('open', () => {
         console.log('✅ OpenAI [Canal Español] conectado con éxito.');
-        // Forzamos a que este canal solo devuelva ESPAÑOL
         openAIWsToSpanish.send(JSON.stringify({
             type: "session.update",
             session: { audio: { output: { language: "es" } } }
@@ -144,7 +148,15 @@ function initOpenAIToSpanish() {
             const response = JSON.parse(message);
             if (response.type === 'error') console.error('❌ [ERROR OPENAI ES]:', response.error);
 
-            // El audio traducido al ESPAÑOL va directo a tus audífonos (Navegador Web)
+            // DIAGNÓSTICO DE TEXTO: ¿Qué está entendiendo OpenAI del teléfono?
+            if (response.type === 'session.input_transcript.delta') {
+                process.stdout.write(`📞 [El Teléfono dice]: ${response.delta}\n`);
+            }
+            if (response.type === 'session.output_transcript.delta') {
+                process.stdout.write(`🇪🇸 [Traducción al Español generada]: ${response.delta}\n`);
+            }
+
+            // Flujo de audio hacia tu Navegador
             if (response.type === 'session.output_audio.delta' && response.delta) {
                 if (browserWs && browserWs.readyState === WebSocket.OPEN) {
                     browserWs.send(JSON.stringify({ type: 'audio', payload: response.delta }));
@@ -155,27 +167,30 @@ function initOpenAIToSpanish() {
         }
     });
 
-    openAIWsToSpanish.on('close', () => { openAIWsToSpanish = null; });
+    openAIWsToSpanish.on('close', () => { console.log('🔌 Canal Español Cerrado.'); openAIWsToSpanish = null; });
     openAIWsToSpanish.on('error', (err) => console.error('Error Canal Español:', err));
 }
 
-// RUTEO DE CONEXIONES ENTRANTES WEBSOCKET
 wss.on('connection', (ws, req) => {
     const urlClara = new URL(req.url, `http://${req.headers.host}`);
     const pathname = urlClara.pathname;
 
-    // Conexión desde tu interfaz Web / Micrófono
     if (pathname === '/browser-stream') {
-        console.log('Navegador móvil WebRTC enlazado al audio.');
+        console.log('🚀 Navegador vinculado.');
         browserWs = ws;
-        initOpenAIToEnglish(); // Abre el intérprete que traduce al inglés
+        initOpenAIToEnglish();
 
         ws.on('message', (message) => {
-            // Tu voz en español entra únicamente al canal que traduce al inglés
+            browserPacketsIn++;
+            // Imprime un reporte cada 100 ráfagas de audio para no saturar la pantalla
+            if (browserPacketsIn % 100 === 0) {
+                console.log(`📥 [DIAGNÓSTICO]: Capturando audio del navegador... (${browserPacketsIn} paquetes recibidos)`);
+            }
+
             if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) {
                 openAIWsToEnglish.send(JSON.stringify({
                     type: "session.input_audio_buffer.append",
-                    audio: message.toString()
+                    audio: message.toString('base64') // Forzamos codificación limpia base64 por si viene crudo
                 }));
             }
         });
@@ -183,11 +198,10 @@ wss.on('connection', (ws, req) => {
         ws.on('close', () => { browserWs = null; });
     } 
     
-    // Conexión desde la llamada de Twilio (Teléfono remotos)
     else if (pathname === '/media-stream') {
-        console.log('Línea telefónica activa con Twilio.');
+        console.log('🚀 Twilio vinculado.');
         twilioWs = ws;
-        initOpenAIToSpanish(); // Abre el intérprete que traduce al español
+        initOpenAIToSpanish();
 
         ws.on('message', (message) => {
             try {
@@ -195,18 +209,24 @@ wss.on('connection', (ws, req) => {
                 
                 if (data.event === 'start') {
                     twilioStreamSid = data.start.streamSid;
-                    console.log(`Enlace de audio Twilio fijado: ${twilioStreamSid}`);
+                    console.log(` Enlace fijado: ${twilioStreamSid}`);
                 }
 
-                // La voz del proveedor en inglés entra únicamente al canal que traduce al español
-                if (data.event === 'media' && openAIWsToSpanish && openAIWsToSpanish.readyState === WebSocket.OPEN) {
-                    openAIWsToSpanish.send(JSON.stringify({
-                        type: "session.input_audio_buffer.append",
-                        audio: data.media.payload
-                    }));
+                if (data.event === 'media') {
+                    twilioPacketsIn++;
+                    if (twilioPacketsIn % 100 === 0) {
+                        console.log(`📥 [DIAGNÓSTICO]: Capturando audio del Teléfono... (${twilioPacketsIn} paquetes recibidos)`);
+                    }
+
+                    if (openAIWsToSpanish && openAIWsToSpanish.readyState === WebSocket.OPEN) {
+                        openAIWsToSpanish.send(JSON.stringify({
+                            type: "session.input_audio_buffer.append",
+                            audio: data.media.payload
+                        }));
+                    }
                 }
             } catch (err) {
-                console.error("Error en flujo de datos Twilio:", err);
+                console.error("Error en flujo Twilio:", err);
             }
         });
 
