@@ -139,9 +139,13 @@ function initOpenAIToEnglish() {
 
     openAIWsToEnglish.on('open', () => {
         console.log('✅ OpenAI [Canal Inglés] conectado con éxito.');
+        // CORRECCIÓN: Se añade "modalities" para exigirle audio de retorno a OpenAI
         openAIWsToEnglish.send(JSON.stringify({
             type: "session.update",
-            session: { audio: { output: { language: "en" } } }
+            session: {
+                modalities: ["text", "audio"],
+                audio: { output: { language: "en" } }
+            }
         }));
     });
 
@@ -159,6 +163,8 @@ function initOpenAIToEnglish() {
 
             // OpenAI entrega 24kHz PCM16 -> Convertimos a 8kHz u-law para Twilio
             if (response.type === 'session.output_audio.delta' && response.delta) {
+                // LOG DE DIAGNÓSTICO DE AUDIO
+                console.log(`🔊 [AUDIO -> TELÉFONO]: Reenviando paquete de voz traducido al Inglés.`);
                 if (twilioWs && twilioWs.readyState === WebSocket.OPEN && twilioStreamSid) {
                     const convertedAudio = openAIToTwilio(response.delta);
                     twilioWs.send(JSON.stringify({ 
@@ -191,9 +197,13 @@ function initOpenAIToSpanish() {
 
     openAIWsToSpanish.on('open', () => {
         console.log('✅ OpenAI [Canal Español] conectado con éxito.');
+        // CORRECCIÓN: Se añade "modalities" para exigirle audio de retorno a OpenAI
         openAIWsToSpanish.send(JSON.stringify({
             type: "session.update",
-            session: { audio: { output: { language: "es" } } }
+            session: {
+                modalities: ["text", "audio"],
+                audio: { output: { language: "es" } }
+            }
         }));
     });
 
@@ -203,15 +213,16 @@ function initOpenAIToSpanish() {
             if (response.type === 'error') console.error('❌ [ERROR OPENAI ES]:', response.error);
 
             if (response.type === 'session.input_transcript.delta') {
-                process.stdout.write(`📞 [El Teléfono dice]: ${response.delta}\n`);
+                document.write(`📞 [El Teléfono dice]: ${response.delta}\n`);
             }
             if (response.type === 'session.output_transcript.delta') {
                 process.stdout.write(`🇪🇸 [Traducción al Español generada]: ${response.delta}\n`);
             }
 
             if (response.type === 'session.output_audio.delta' && response.delta) {
+                // LOG DE DIAGNÓSTICO DE AUDIO
+                console.log(`🔊 [AUDIO -> NAVEGADOR]: Reenviando paquete de voz traducido al Español.`);
                 if (browserWs && browserWs.readyState === WebSocket.OPEN) {
-                    // Convertimos los 24kHz PCM de OpenAI a 8kHz u-law para el navegador
                     const convertedAudio = openAIToTwilio(response.delta);
                     browserWs.send(JSON.stringify({ type: 'audio', payload: convertedAudio }));
                 }
@@ -224,7 +235,6 @@ function initOpenAIToSpanish() {
     openAIWsToSpanish.on('close', () => { openAIWsToSpanish = null; });
     openAIWsToSpanish.on('error', (err) => console.error('Error Canal Español:', err));
 }
-
 wss.on('connection', (ws, req) => {
     const urlClara = new URL(req.url, `http://${req.headers.host}`);
     const pathname = urlClara.pathname;
