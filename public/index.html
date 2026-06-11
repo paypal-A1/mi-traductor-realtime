@@ -168,7 +168,8 @@
 
     function playUlawBase64(base64Data) {
         if (!audioCtx) {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+            // CORRECCIÓN: Eliminamos la restricción de sampleRate forzada al hardware del navegador
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         }
         if (audioCtx.state === 'suspended') {
             audioCtx.resume();
@@ -180,7 +181,8 @@
         for (let i = 0; i < len; i++) {
             float32Data[i] = ulaw2linear(binaryString.charCodeAt(i)) / 32768;
         }
-
+    
+        // Aquí sí le decimos que el buffer entrante es de 8000Hz para que lo estire correctamente al hardware nativo
         const audioBuffer = audioCtx.createBuffer(1, len, 8000);
         audioBuffer.getChannelData(0).set(float32Data);
         
@@ -189,7 +191,6 @@
         bufferSource.connect(audioCtx.destination);
         bufferSource.start();
     }
-
     async function startCall() {
         const number = document.getElementById('phoneNumber').value;
         if(!number) return alert("Escribe un número válido");
