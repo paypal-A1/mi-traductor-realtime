@@ -125,7 +125,7 @@ let twilioStreamSid = null;
 
 let twilioPacketsIn = 0;
 
-// VARIABLES GLOBALES PARA CONTROL DE LATENCIA (TIMESTAMPS)
+// VARIABLES GLOBALES PARA CONTROL DE LATENCIA (TIMESTAMPS).
 let engSpeechStoppedTime = 0;
 let engResponseCreatedTime = 0;
 let engWaitingForFirstAudio = false;
