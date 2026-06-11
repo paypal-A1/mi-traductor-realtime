@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
-const path = require('path'); // Requerido para mapear la ruta del HTML
+const path = require('path');
 
 const app = express();
 app.use(express.json());
@@ -18,10 +18,32 @@ if (!process.env.OPENAI_API_KEY) {
 }
 
 // ==========================================
-// RUTA PARA SERVIR EL FRONTEND (INDEX.HTML)
+// RUTA INTELIGENTE PARA SERVIR EL FRONTEND
 // ==========================================
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    // Intentamos buscar el HTML en la raíz de ejecución de Render (cwd)
+    const pathDesdeCwd = path.join(process.cwd(), 'index.html');
+    // Alternativa secundaria basada en el directorio del script
+    const pathDesdeDirname = path.join(__dirname, 'index.html');
+
+    res.sendFile(pathDesdeCwd, (err) => {
+        if (err) {
+            // Si el primero falla, intentamos con la ruta secundaria
+            res.sendFile(pathDesdeDirname, (err2) => {
+                if (err2) {
+                    console.error("❌ [ERROR]: index.html no fue encontrado en ninguna de las rutas esperadas.");
+                    console.error("Ruta 1 (CWD):", pathDesdeCwd);
+                    console.error("Ruta 2 (DIRNAME):", pathDesdeDirname);
+                    
+                    res.status(404).send(`
+                        <h1>Archivo No Encontrado (404)</h1>
+                        <p>Express está activo, pero no se encuentra el archivo <strong>index.html</strong> en tu repositorio.</p>
+                        <p>Por favor, asegúrate de que el archivo 'index.html' esté guardado exactamente en la raíz de tu GitHub (al mismo nivel que server.js).</p>
+                    `);
+                }
+            });
+        }
+    });
 });
 
 // ==========================================
@@ -45,7 +67,8 @@ function encodeMuLawSample(sample) {
 }
 
 function decodeMuLawSample(mulawByte) {
-    ~mulawByte;
+    // CORREGIDO: Se aplica y asigna la inversión de bits correctamente
+    mulawByte = ~mulawByte;
     let sign = mulawByte & 0x80;
     let exponent = (mulawByte & 0x70) >> 4;
     let mantissa = mulawByte & 0x0F;
@@ -197,7 +220,7 @@ wss.on("connection", (ws, req) => {
                     twilioStreamSid = msg.start.streamSid;
                     console.log(`Enlace de audio Twilio fijado: ${twilioStreamSid}`);
                     
-                    // Iniciamos la sesión de OpenAI por defecto traduciendo a 
+                    // Iniciamos la sesión de OpenAI por defecto traduciendo a Español
                     openAiWs = iniciarSesionOpenAI(ws, "es", "twilio", twilioStreamSid);
                 }
 
