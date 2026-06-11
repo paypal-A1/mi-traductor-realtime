@@ -1,15 +1,21 @@
 const express = require('express');
 const WebSocket = require('ws');
 const dotenv = require('dotenv');
+// Inicializamos Twilio para poder realizar llamadas salientes
+const twilio = require('twilio'); 
+
 dotenv.config();
 
 const app = express();
-app.use(express.static('public')); // Sirve la interfaz visual
+app.use(express.static('public'));
 app.use(express.urlencoded({ extended: true }));
+app.use(express.json()); // Permite recibir datos desde la interfaz web
 
 const PORT = process.env.PORT || 3000;
 
-// 1. INSTRUCCIONES ESTRICTAS PARA OPENAI (Traductor Puro)
+// Cliente Twilio para llamadas salientes
+const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
 const SYSTEM_INSTRUCTIONS = `
 Eres un dispositivo de traducción simultánea de hardware en tiempo real. 
 TIENES PROHIBIDO responder preguntas, saludar, despedirte o interactuar. 
@@ -18,30 +24,42 @@ y escuchar el Canal B (del cliente) y traducirlo al español de inmediato.
 Si alguna de las partes te hace una pregunta directamente a ti, NO la respondas; solo tradúcela al otro idioma.
 `;
 
-// 2. Ruta para que Twilio se conecte cuando se inicie la llamada
+// 1. FLUJO ENTRANTE: Qué pasa cuando te llaman a tu número Twilio
 app.post('/twiml', (req, res) => {
-    const phoneNumber = req.body.To;
-    
-    // TwiML que le dice a Twilio: "Abre un canal de audio WebSocket hacia Render"
     res.type('text/xml');
     res.send(`
         <Response>
             <Connect>
                 <Stream url="wss://${req.headers.host}/media-stream" />
             </Connect>
-            <Dial>${phoneNumber}</Dial>
         </Response>
     `);
 });
 
-// 3. Servidor de WebSockets para manejar el flujo de audio bidireccional
+// 2. FLUJO SALIENTE: Acción cuando tú presionas "Iniciar Llamada" en la web
+app.post('/make-call', async (req, res) => {
+    const { toPhoneNumber } = req.body;
+    
+    try {
+        const call = await client.calls.create({
+            url: `https://${req.headers.host}/twiml`, // Le dice a la llamada que use nuestro traductor
+            to: toPhoneNumber,
+            from: process.env.TWILIO_NUMBER || '+18633445321'
+        });
+        res.status(200).json({ success: true, callSid: call.sid });
+    } catch (error) {
+        console.error('Error al realizar la llamada:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 3. EL CONECTOR DE AUDIO (WebSockets para OpenAI y Twilio)
 const server = app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
 const wss = new WebSocket.Server({ server });
 
 wss.on('connection', (ws) => {
-    console.log('Conexión de audio establecida desde Twilio (EE. UU.)');
+    console.log('Conexión de audio establecida (Llamada en curso)');
     
-    // Abrir conexión en vivo con OpenAI Realtime API
     const openAIWs = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview', {
         headers: {
             "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -49,14 +67,13 @@ wss.on('connection', (ws) => {
         }
     });
 
-    // Configurar instrucciones en OpenAI apenas conecte
     openAIWs.on('open', () => {
         const sessionUpdate = {
             type: "session.update",
             session: {
                 modalities: ["audio", "text"],
                 instructions: SYSTEM_INSTRUCTIONS,
-                voice: "alloy", // Voz natural humana
+                voice: "alloy",
                 input_audio_format: "g711_ulaw",
                 output_audio_format: "g711_ulaw"
             }
@@ -64,11 +81,8 @@ wss.on('connection', (ws) => {
         openAIWs.send(JSON.stringify(sessionUpdate));
     });
 
-    // Aquí el código Node.js puentea los audios de forma independiente
     ws.on('message', (message) => {
         const data = JSON.parse(message);
-        
-        // Si es audio que viene de Twilio, se lo mandamos directo a OpenAI
         if (data.event === 'media' && openAIWs.readyState === WebSocket.OPEN) {
             const audioPayload = {
                 type: "input_audio_buffer.append",
@@ -78,7 +92,6 @@ wss.on('connection', (ws) => {
         }
     });
 
-    // Cuando OpenAI responde con el audio traducido, se lo inyectamos de vuelta a Twilio
     openAIWs.on('message', (message) => {
         const response = JSON.parse(message);
         if (response.type === 'response.audio.delta' && ws.readyState === WebSocket.OPEN) {
