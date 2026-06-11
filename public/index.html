@@ -3,163 +3,244 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Consola Traductora</title>
+    <title>Consola Traductora de Llamadas</title>
     <style>
-        body { font-family: Arial; text-align: center; background: #f4f7f6; padding: 20px; }
-        .container { max-width: 350px; margin: auto; background: white; padding: 30px; border-radius: 20px; }
-        input { width: 100%; height: 50px; font-size: 24px; text-align: center; margin-bottom: 20px; }
-        button { padding: 18px; font-size: 20px; margin: 5px; border-radius: 10px; cursor: pointer; }
-        .call { background: #2ecc71; color: white; width: 100%; }
-        .hangup { background: #e74c3c; color: white; width: 100%; display: none; }
-        .sound { background: #3498db; color: white; width: 100%; margin-top: 10px; }
-        .status { margin-top: 15px; font-size: 14px; color: #e67e22; }
+        body { font-family: Arial, sans-serif; text-align: center; background: #f4f7f6; padding: 20px; }
+        .phone-container { max-width: 350px; margin: 0 auto; background: white; padding: 30px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .display { width: 100%; height: 50px; font-size: 24px; text-align: center; margin-bottom: 20px; border-radius: 10px; border: 1px solid #ccc; outline: none; box-sizing: border-box; }
+        .keyboard { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        button { padding: 18px; font-size: 20px; border-radius: 10px; border: none; cursor: pointer; background: #e0e0e0; transition: background 0.1s; }
+        button:active { background: #d0d0d0; }
+        button.call { background: #2ecc71; color: white; grid-column: span 3; margin-top: 5px; }
+        button.hangup { background: #e74c3c; color: white; grid-column: span 3; margin-top: 5px; display: none; }
+        .status { margin-top: 15px; font-size: 14px; color: #e67e22; font-weight: bold; }
+        .history-section { margin-top: 25px; text-align: left; background: #f9f9f9; padding: 12px; border-radius: 10px; }
+        .history-title { font-size: 13px; font-weight: bold; color: #7f8c8d; margin-bottom: 8px; text-transform: uppercase; }
+        .history-item { display: flex; justify-content: space-between; align-items: center; padding: 8px; background: white; margin-bottom: 5px; border-radius: 6px; border: 1px solid #edeec4; cursor: pointer; font-size: 14px; }
+        .history-item:hover { background: #f1f2f6; }
     </style>
 </head>
 <body>
-<div class="container">
+
+<div class="phone-container">
     <h2>Traductor Global</h2>
-    <input type="text" id="phoneNumber" placeholder="+1234567890" />
-    <div>
+    <input type="text" id="phoneNumber" class="display" placeholder="+1234567890" />
+    
+    <div class="keyboard">
         <button onclick="press('1')">1</button><button onclick="press('2')">2</button><button onclick="press('3')">3</button>
         <button onclick="press('4')">4</button><button onclick="press('5')">5</button><button onclick="press('6')">6</button>
         <button onclick="press('7')">7</button><button onclick="press('8')">8</button><button onclick="press('9')">9</button>
         <button onclick="press('+')">+</button><button onclick="press('0')">0</button><button onclick="backspace()">⌫</button>
+        
+        <button id="callBtn" class="call" onclick="startCall()">📞 Iniciar Llamada</button>
+        <button id="hangupBtn" class="hangup" onclick="endCall()">🛑 Finalizar Llamada</button>
     </div>
-    <button id="callBtn" class="call" onclick="startCall()">📞 Llamar</button>
-    <button id="hangupBtn" class="hangup" onclick="endCall()">🛑 Colgar</button>
-    <button id="activarSonidoBtn" class="sound">🔊 Activar Sonido</button>
-    <div id="statusMessage" class="status">Conectando...</div>
+
+    <div id="statusMessage" class="status">Conectando canales...</div>
+
+    <div class="history-section">
+        <div class="history-title">🕒 Recientes (Toca para cargar)</div>
+        <div id="historyList"></div>
+    </div>
 </div>
 
 <script>
-    let ws, audioCtx, processor, source, globalStream;
-    let keepAliveInterval;
+    let ws;
+    let audioCtx;
+    let processor;
+    let source;
+    let globalStream;
 
-    function press(n) { document.getElementById('phoneNumber').value += n; }
-    function backspace() { let v = document.getElementById('phoneNumber').value; document.getElementById('phoneNumber').value = v.slice(0, -1); }
+    function press(num) { document.getElementById('phoneNumber').value += num; }
+    
+    function backspace() {
+        let current = document.getElementById('phoneNumber').value;
+        document.getElementById('phoneNumber').value = current.slice(0, -1);
+    }
+
+    function loadHistory() {
+        const history = JSON.parse(localStorage.getItem('phoneHistory')) || [];
+        const container = document.getElementById('historyList');
+        container.innerHTML = '';
+        if(history.length === 0) {
+            container.innerHTML = '<span style="color:#aaa; font-size:12px;">No hay llamadas recientes</span>';
+            return;
+        }
+        history.forEach(num => {
+            const div = document.createElement('div');
+            div.className = 'history-item';
+            div.innerHTML = `<span>${num}</span><span style="color:#2ecc71; font-weight:bold;">⚡</span>`;
+            div.onclick = () => { document.getElementById('phoneNumber').value = num; };
+            container.appendChild(div);
+        });
+    }
+
+    function saveHistory(num) {
+        let history = JSON.parse(localStorage.getItem('phoneHistory')) || [];
+        history = history.filter(item => item !== num);
+        history.unshift(num);
+        if(history.length > 5) history.pop();
+        localStorage.setItem('phoneHistory', JSON.stringify(history));
+        loadHistory();
+    }
 
     function connectWebSocket() {
-        const protocol = location.protocol === 'https:' ? 'wss://' : 'ws://';
-        ws = new WebSocket(protocol + location.host + '/browser-stream');
+        const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+        ws = new WebSocket(protocol + window.location.host + '/browser-stream');
         
         ws.onopen = () => {
-            document.getElementById('statusMessage').innerText = "✅ Conectado";
-            if (keepAliveInterval) clearInterval(keepAliveInterval);
-            keepAliveInterval = setInterval(() => {
-                if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
-            }, 25000);
+            document.getElementById('statusMessage').style.color = '#2ecc71';
+            document.getElementById('statusMessage').innerText = "Sistema Listo y Conectado";
         };
         
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                if (data.type === 'audio' && data.payload) playUlawBase64(data.payload);
-            } catch(e) {
-                // Si no es JSON, es audio base64 directo
-                playUlawBase64(event.data);
-            }
+                if (data.type === 'audio' && data.payload) {
+                    playUlawBase64(data.payload);
+                }
+            } catch(e) { console.error(e); }
         };
-        
+
         ws.onclose = () => {
-            if (keepAliveInterval) clearInterval(keepAliveInterval);
-            document.getElementById('statusMessage').innerText = "⚠️ Reconectando...";
+            document.getElementById('statusMessage').style.color = '#e67e22';
+            document.getElementById('statusMessage').innerText = "Reconectando audio...";
             setTimeout(connectWebSocket, 3000);
         };
     }
 
     async function startMicrophone() {
         try {
-            globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            if (audioCtx.state === 'suspended') await audioCtx.resume();
+            globalStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+            }
             source = audioCtx.createMediaStreamSource(globalStream);
             processor = audioCtx.createScriptProcessor(2048, 1, 1);
+
             source.connect(processor);
             processor.connect(audioCtx.destination);
+
             processor.onaudioprocess = (e) => {
-                const input = e.inputBuffer.getChannelData(0);
-                const ulaw = new Uint8Array(input.length);
-                for (let i = 0; i < input.length; i++) {
-                    let s = Math.min(1, Math.max(-1, input[i])) * 32767;
-                    ulaw[i] = linear2ulaw(s);
+                const inputData = e.inputBuffer.getChannelData(0);
+                const ulawBytes = new Uint8Array(inputData.length);
+                for (let i = 0; i < inputData.length; i++) {
+                    let sample = Math.min(1, Math.max(-1, inputData[i])) * 32767;
+                    ulawBytes[i] = linear2ulaw(sample);
                 }
                 if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(btoa(String.fromCharCode.apply(null, ulaw)));
+                    const base64Audio = btoa(String.fromCharCode.apply(null, ulawBytes));
+                    ws.send(base64Audio);
                 }
             };
-        } catch(err) { alert("Microfono no disponible"); }
+        } catch (err) {
+            alert("Por favor permite el acceso al micrófono.");
+        }
     }
 
     function stopMicrophone() {
-        if (globalStream) globalStream.getTracks().forEach(t => t.stop());
+        if (globalStream) globalStream.getTracks().forEach(track => track.stop());
         if (processor) processor.disconnect();
         if (source) source.disconnect();
     }
 
-    function linear2ulaw(s) {
-        let sign = (s >> 8) & 0x80;
-        if (s < 0) { s = -s; sign = 0x80; }
-        if (s > 32635) s = 32635;
-        s += 0x84;
-        let exp = 7;
-        for (let bit = 0x4000; (s & bit) === 0 && exp > 0; bit >>= 1) exp--;
-        let mant = (s >> (exp + 3)) & 0x0F;
-        return ~(sign | (exp << 4) | mant) & 0xFF;
+    function linear2ulaw(sample) {
+        let sign = (sample >> 8) & 0x80;
+        if (sample < 0) { sample = -sample; sign = 0x80; }
+        if (sample > 32635) sample = 32635;
+        sample += 0x84;
+        let exponent = 7;
+        for (let bit = 0x4000; (sample & bit) === 0 && exponent > 0; bit >>= 1) { exponent--; }
+        let mantissa = (sample >> (exponent + 3)) & 0x0F;
+        return ~(sign | (exponent << 4) | mantissa) & 0xFF;
     }
 
     function ulaw2linear(ulaw) {
         ulaw = ~ulaw & 0xFF;
-        let sign = ulaw & 0x80;
-        let exp = (ulaw >> 4) & 0x07;
-        let mant = ulaw & 0x0F;
-        let s = ((mant << 3) + 132) << exp;
-        s -= 132;
-        return sign ? -s : s;
+        let sign = (ulaw & 0x80);
+        let exponent = (ulaw >> 4) & 0x07;
+        let mantissa = ulaw & 0x0F;
+        let sample = (mantissa << 3) + 132;
+        sample <<= exponent;
+        sample -= 132;
+        return sign ? -sample : sample;
     }
 
-    function playUlawBase64(b64) {
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        const bin = atob(b64);
-        const floats = new Float32Array(bin.length);
-        for (let i = 0; i < bin.length; i++) floats[i] = ulaw2linear(bin.charCodeAt(i)) / 32768;
-        const buf = audioCtx.createBuffer(1, bin.length, 8000);
-        buf.getChannelData(0).set(floats);
-        const src = audioCtx.createBufferSource();
-        src.buffer = buf;
-        src.connect(audioCtx.destination);
-        src.start();
+    function playUlawBase64(base64Data) {
+        if (!audioCtx) {
+            // CORRECCIÓN: Eliminamos la restricción de sampleRate forzada al hardware del navegador
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+        const binaryString = atob(base64Data);
+        const len = binaryString.length;
+        const float32Data = new Float32Array(len);
+        
+        for (let i = 0; i < len; i++) {
+            float32Data[i] = ulaw2linear(binaryString.charCodeAt(i)) / 32768;
+        }
+    
+        // Aquí sí le decimos que el buffer entrante es de 8000Hz para que lo estire correctamente al hardware nativo
+        const audioBuffer = audioCtx.createBuffer(1, len, 8000);
+        audioBuffer.getChannelData(0).set(float32Data);
+        
+        const bufferSource = audioCtx.createBufferSource();
+        bufferSource.buffer = audioBuffer;
+        bufferSource.connect(audioCtx.destination);
+        bufferSource.start();
     }
-
     async function startCall() {
         const number = document.getElementById('phoneNumber').value;
-        if (!number) return alert("Número requerido");
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        await audioCtx.resume();
+        if(!number) return alert("Escribe un número válido");
+        
         document.getElementById('callBtn').style.display = 'none';
         document.getElementById('hangupBtn').style.display = 'block';
+        document.getElementById('statusMessage').innerText = "Marcando...";
+        
+        saveHistory(number);
         await startMicrophone();
-        const res = await fetch('/make-call', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ toPhoneNumber: number }) });
-        const data = await res.json();
-        if (!data.success) alert("Error: " + data.error);
-        else document.getElementById('statusMessage').innerText = "Llamada activa";
+
+        try {
+            const response = await fetch('/make-call', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ toPhoneNumber: number })
+            });
+            
+            const result = await response.json();
+            if(result.success) {
+                document.getElementById('statusMessage').innerText = "Llamada en curso...";
+            } else {
+                alert("Error de Twilio: " + result.error);
+                resetButtons();
+            }
+        } catch (error) {
+            alert("Error de red al enlazar llamada.");
+            resetButtons();
+        }
     }
 
     async function endCall() {
-        await fetch('/hangup', { method: 'POST' });
+        document.getElementById('statusMessage').innerText = "Cortando conexión...";
+        try {
+            await fetch('/hangup', { method: 'POST' });
+        } catch(e) { console.error(e); }
         stopMicrophone();
-        document.getElementById('callBtn').style.display = 'block';
-        document.getElementById('hangupBtn').style.display = 'none';
-        document.getElementById('statusMessage').innerText = "Llamada finalizada";
+        resetButtons();
+        document.getElementById('statusMessage').innerText = "Llamada finalizada de forma segura.";
     }
 
-    document.getElementById('activarSonidoBtn').onclick = async () => {
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        await audioCtx.resume();
-        document.getElementById('statusMessage').innerText = "✅ Sonido activado";
-    };
+    function resetButtons() {
+        document.getElementById('callBtn').style.display = 'block';
+        document.getElementById('hangupBtn').style.display = 'none';
+    }
 
-    window.onload = () => { connectWebSocket(); };
+    window.onload = () => {
+        connectWebSocket();
+        loadHistory();
+    };
 </script>
 </body>
 </html>
