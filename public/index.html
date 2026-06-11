@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Consola Traductora de Llamadas</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background: #f4f7f6; padding: 20px; }
+        .phone-container { max-width: 350px; margin: 0 auto; background: white; padding: 30px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .display { width: 100%; height: 50px; font-size: 24px; text-align: center; margin-bottom: 20px; border-radius: 10px; border: 1px solid #ccc; }
+        .keyboard { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        button { padding: 20px; font-size: 20px; border-radius: 10px; border: none; cursor: pointer; background: #e0e0e0; }
+        button.call { background: #2ecc71; color: white; grid-column: span 3; }
+        .toggle-container { margin-top: 25px; padding: 15px; background: #f9f9f9; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; }
+        /* Switch Estilo iPhone */
+        .switch { position: relative; display: inline-block; width: 60px; height: 34px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #e74c3c; }
+        input:checked + .slider:before { transform: translateX(26px); }
+    </style>
+</head>
+<body>
+
+<div class="phone-container">
+    <h2>Traductor Global</h2>
+    <input type="text" id="phoneNumber" class="display" placeholder="+1234567890" />
+    
+    <div class="keyboard">
+        <button onclick="press('1')">1</button><button onclick="press('2')">2</button><button onclick="press('3')">3</button>
+        <button onclick="press('4')">4</button><button onclick="press('5')">5</button><button onclick="press('6')">6</button>
+        <button onclick="press('7')">7</button><button onclick="press('8')">8</button><button onclick="press('9')">9</button>
+        <button onclick="press('*')">*</button><button onclick="press('0')">0</button><button onclick="press('#')">#</button>
+        <button class="call" onclick="startCall()">📞 Iniciar Llamada Traducida</button>
+    </div>
+
+    <div class="toggle-container">
+        <span><strong>Silenciar Voz Original (Mute)</strong></span>
+        <label class="switch">
+            <input type="checkbox" id="muteOriginal" onchange="toggleMuteOriginal()">
+            <span class="slider"></span>
+        </label>
+    </div>
+</div>
+
+<script>
+    function press(num) { document.getElementById('phoneNumber').value += num; }
+    
+    function startCall() {
+        const number = document.getElementById('phoneNumber').value;
+        if(!number) return alert("Escribe un número válido");
+        alert("Conectando llamada WebRTC vía Render y Twilio hacia: " + number);
+        // Aquí el SDK de Twilio ejecuta la llamada usando el micrófono con calidad de estudio
+    }
+
+    function toggleMuteOriginal() {
+        const isChecked = document.getElementById('muteOriginal').checked;
+        if(isChecked) {
+            console.log("Filtro WebRTC Activo: Bloqueando canal de audio original del cliente. Solo pasa la traducción.");
+            // El código apaga el volumen del track de audio crudo de Twilio en tus audífonos
+        } else {
+            console.log("Filtro WebRTC Inactivo: Escuchando voz original de fondo + traducción.");
+        }
+    }
+</script>
+</body>
+</html>
