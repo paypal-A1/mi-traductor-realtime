@@ -14,6 +14,8 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
+let activeCallSid = null; // Guarda el ID de la llamada para poder colgarla
+
 const SYSTEM_INSTRUCTIONS = `
 Eres un dispositivo de traducción simultánea de hardware en tiempo real. 
 TIENES PROHIBIDO responder preguntas, saludar, despedirte o interactuar. 
@@ -41,9 +43,26 @@ app.post('/make-call', async (req, res) => {
             to: toPhoneNumber,
             from: process.env.TWILIO_NUMBER || '+18633445321'
         });
+        activeCallSid = call.sid; // Guardamos el SID de la llamada activa
         res.status(200).json({ success: true, callSid: call.sid });
     } catch (error) {
         console.error('Error al realizar la llamada:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// NUEVA RUTA: Permite colgar la llamada desde la interfaz web
+app.post('/hangup', async (req, res) => {
+    try {
+        if (activeCallSid) {
+            await client.calls(activeCallSid).update({ status: 'completed' });
+            activeCallSid = null;
+            res.status(200).json({ success: true });
+        } else {
+            res.status(400).json({ success: false, error: "No hay llamada activa" });
+        }
+    } catch (error) {
+        console.error('Error al colgar:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -54,6 +73,7 @@ const wss = new WebSocket.Server({ server });
 let openAIWs = null;
 let twilioWs = null;
 let browserWs = null;
+let twilioStreamSid = null; // IMPORTANTE: Guardar el puente de Twilio
 
 function initOpenAI() {
     if (openAIWs && openAIWs.readyState === WebSocket.OPEN) return;
@@ -84,13 +104,19 @@ function initOpenAI() {
     openAIWs.on('message', (message) => {
         const response = JSON.parse(message);
         
-        if (response.type === 'response.audio.delta' && response.audio) {
-            // Reenviar la traducción en vivo a ambos extremos de la llamada
-            if (twilioWs && twilioWs.readyState === WebSocket.OPEN) {
-                twilioWs.send(JSON.stringify({ event: "media", media: { payload: response.audio } }));
+        // CORRECCIÓN CRÍTICA: El objeto es response.delta, no response.audio
+        if (response.type === 'response.audio.delta' && response.delta) {
+            // Reenviar a Twilio usando su identificador obligatorio (streamSid)
+            if (twilioWs && twilioWs.readyState === WebSocket.OPEN && twilioStreamSid) {
+                twilioWs.send(JSON.stringify({ 
+                    event: "media", 
+                    streamSid: twilioStreamSid, 
+                    media: { payload: response.delta } 
+                }));
             }
+            // Reenviar al navegador
             if (browserWs && browserWs.readyState === WebSocket.OPEN) {
-                browserWs.send(JSON.stringify({ type: 'audio', payload: response.audio }));
+                browserWs.send(JSON.stringify({ type: 'audio', payload: response.delta }));
             }
         }
     });
@@ -117,12 +143,19 @@ wss.on('connection', (ws, req) => {
     } 
     
     else if (pathname === '/media-stream') {
-        console.log('Línea telefónica del proveedor activa.');
+        console.log('Línea telefónica activa.');
         twilioWs = ws;
         initOpenAI();
 
         ws.on('message', (message) => {
             const data = JSON.parse(message);
+            
+            // CORRECCIÓN CRÍTICA: Capturar el identificador de transmisión de Twilio
+            if (data.event === 'start') {
+                twilioStreamSid = data.start.streamSid;
+                console.log(`Enlace de audio Twilio fijado: ${twilioStreamSid}`);
+            }
+
             if (data.event === 'media' && openAIWs && openAIWs.readyState === WebSocket.OPEN) {
                 openAIWs.send(JSON.stringify({
                     type: "input_audio_buffer.append",
@@ -131,6 +164,9 @@ wss.on('connection', (ws, req) => {
             }
         });
 
-        ws.on('close', () => { twilioWs = null; });
+        ws.on('close', () => { 
+            twilioWs = null; 
+            twilioStreamSid = null;
+        });
     }
 });
