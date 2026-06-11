@@ -43,7 +43,7 @@ function encodeMuLawSample(pcm) {
     return ~(sign | (exponent << 4) | mantissa) & 0xFF;
 }
 
-// CONVERSOR 1: Teléfono (8kHz u-law) ➡️ OpenAI (24kHz PCM16)
+// CONVERSOR 1: Teléfono/Navegador (8kHz u-law) ➡️ OpenAI (24kHz PCM16)
 function twilioToOpenAI(ulawBuffer) {
     const outBuffer = Buffer.alloc(ulawBuffer.length * 6);
     let outIdx = 0;
@@ -57,7 +57,7 @@ function twilioToOpenAI(ulawBuffer) {
     return outBuffer.toString('base64');
 }
 
-// CONVERSOR 2: OpenAI (24kHz PCM16) ➡️ Teléfono (8kHz u-law)
+// CONVERSOR 2: OpenAI (24kHz PCM16) ➡️ Teléfono/Navegador (8kHz u-law)
 function openAIToTwilio(pcmBase64) {
     const inBuffer = Buffer.from(pcmBase64, 'base64');
     const outBuffer = Buffer.alloc(Math.floor(inBuffer.length / 6));
@@ -193,7 +193,7 @@ function initOpenAIToSpanish() {
         console.log('✅ OpenAI [Canal Español] conectado con éxito.');
         openAIWsToSpanish.send(JSON.stringify({
             type: "session.update",
-            session: { audio: { output: { language: "es" } } } // Limpio, sin parámetros inválidos
+            session: { audio: { output: { language: "es" } } }
         }));
     });
 
@@ -211,7 +211,9 @@ function initOpenAIToSpanish() {
 
             if (response.type === 'session.output_audio.delta' && response.delta) {
                 if (browserWs && browserWs.readyState === WebSocket.OPEN) {
-                    browserWs.send(JSON.stringify({ type: 'audio', payload: response.delta }));
+                    // Convertimos los 24kHz PCM de OpenAI a 8kHz u-law para el navegador
+                    const convertedAudio = openAIToTwilio(response.delta);
+                    browserWs.send(JSON.stringify({ type: 'audio', payload: convertedAudio }));
                 }
             }
         } catch (e) {
@@ -234,10 +236,20 @@ wss.on('connection', (ws, req) => {
 
         ws.on('message', (message) => {
             if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) {
-                openAIWsToEnglish.send(JSON.stringify({
-                    type: "session.input_audio_buffer.append",
-                    audio: message.toString('base64')
-                }));
+                try {
+                    const base64Str = message.toString();
+                    const ulawBuffer = Buffer.from(base64Str, 'base64');
+                    
+                    // Convertimos el audio de la web (8kHz u-law) a 24kHz PCM para OpenAI
+                    const convertedAudio = twilioToOpenAI(ulawBuffer);
+                    
+                    openAIWsToEnglish.send(JSON.stringify({
+                        type: "session.input_audio_buffer.append",
+                        audio: convertedAudio
+                    }));
+                } catch (err) {
+                    console.error("Error al procesar audio del navegador:", err);
+                }
             }
         });
 
