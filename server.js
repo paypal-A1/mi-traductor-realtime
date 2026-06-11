@@ -85,9 +85,12 @@ function initOpenAIToEnglish() {
 
     openAIWsToEnglish.on('open', () => {
         console.log('✅ OpenAI [Canal Inglés] conectado con éxito.');
+        // Si tu navegador envía PCM tradicional, le especificamos el formato por defecto
         openAIWsToEnglish.send(JSON.stringify({
             type: "session.update",
-            session: { audio: { output: { language: "en" } } }
+            session: { 
+                audio: { output: { language: "en" } }
+            }
         }));
     });
 
@@ -137,9 +140,14 @@ function initOpenAIToSpanish() {
 
     openAIWsToSpanish.on('open', () => {
         console.log('✅ OpenAI [Canal Español] conectado con éxito.');
+        // Intentamos indicarle a OpenAI que el teléfono le enviará y esperará G711 Ulaw
         openAIWsToSpanish.send(JSON.stringify({
             type: "session.update",
-            session: { audio: { output: { language: "es" } } }
+            session: { 
+                input_audio_format: "g711_ulaw",
+                output_audio_format: "g711_ulaw",
+                audio: { output: { language: "es" } } 
+            }
         }));
     });
 
