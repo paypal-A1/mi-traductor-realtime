@@ -201,7 +201,7 @@
             
             const result = await response.json();
             if(result.success) {
-                document.getElementById('statusMessage').innerText = "Llamada establecida. ¡Presiona una tecla al contestar!";
+                document.getElementById('statusMessage').innerText = "Llamada en curso...";
             } else {
                 alert("Error de Twilio: " + result.error);
                 resetButtons();
