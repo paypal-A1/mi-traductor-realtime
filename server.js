@@ -1,30 +1,27 @@
 const express = require('express');
 const WebSocket = require('ws');
 const dotenv = require('dotenv');
-// Inicializamos Twilio para poder realizar llamadas salientes
-const twilio = require('twilio'); 
+const twilio = require('twilio');
+const url = require('url');
 
 dotenv.config();
 
 const app = express();
 app.use(express.static('public'));
 app.use(express.urlencoded({ extended: true }));
-app.use(express.json()); // Permite recibir datos desde la interfaz web
+app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-
-// Cliente Twilio para llamadas salientes
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 const SYSTEM_INSTRUCTIONS = `
 Eres un dispositivo de traducción simultánea de hardware en tiempo real. 
 TIENES PROHIBIDO responder preguntas, saludar, despedirte o interactuar. 
-Tu única función es escuchar el Canal A (del usuario) y traducirlo al inglés de inmediato con voz natural y fluida, 
-y escuchar el Canal B (del cliente) y traducirlo al español de inmediato. 
+Tu única función es escuchar al usuario (que hablará en español) y traducirlo al inglés de inmediato con voz natural, 
+y escuchar al proveedor (que hablará en inglés) y traducirlo al español de inmediato. 
 Si alguna de las partes te hace una pregunta directamente a ti, NO la respondas; solo tradúcela al otro idioma.
 `;
 
-// 1. FLUJO ENTRANTE: Qué pasa cuando te llaman a tu número Twilio
 app.post('/twiml', (req, res) => {
     res.type('text/xml');
     res.send(`
@@ -36,13 +33,11 @@ app.post('/twiml', (req, res) => {
     `);
 });
 
-// 2. FLUJO SALIENTE: Acción cuando tú presionas "Iniciar Llamada" en la web
 app.post('/make-call', async (req, res) => {
     const { toPhoneNumber } = req.body;
-    
     try {
         const call = await client.calls.create({
-            url: `https://${req.headers.host}/twiml`, // Le dice a la llamada que use nuestro traductor
+            url: `https://${req.headers.host}/twiml`,
             to: toPhoneNumber,
             from: process.env.TWILIO_NUMBER || '+18633445321'
         });
@@ -53,14 +48,18 @@ app.post('/make-call', async (req, res) => {
     }
 });
 
-// 3. EL CONECTOR DE AUDIO (WebSockets para OpenAI y Twilio)
 const server = app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
 const wss = new WebSocket.Server({ server });
 
-wss.on('connection', (ws) => {
-    console.log('Conexión de audio establecida (Llamada en curso)');
-    
-    const openAIWs = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview', {
+let openAIWs = null;
+let twilioWs = null;
+let browserWs = null;
+
+function initOpenAI() {
+    if (openAIWs && openAIWs.readyState === WebSocket.OPEN) return;
+
+    console.log('Conectando con OpenAI Realtime API...');
+    openAIWs = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview', {
         headers: {
             "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
             "OpenAI-Beta": "realtime=2024-10-01"
@@ -68,6 +67,7 @@ wss.on('connection', (ws) => {
     });
 
     openAIWs.on('open', () => {
+        console.log('Conectado a OpenAI con éxito.');
         const sessionUpdate = {
             type: "session.update",
             session: {
@@ -81,25 +81,56 @@ wss.on('connection', (ws) => {
         openAIWs.send(JSON.stringify(sessionUpdate));
     });
 
-    ws.on('message', (message) => {
-        const data = JSON.parse(message);
-        if (data.event === 'media' && openAIWs.readyState === WebSocket.OPEN) {
-            const audioPayload = {
-                type: "input_audio_buffer.append",
-                audio: data.media.payload
-            };
-            openAIWs.send(JSON.stringify(audioPayload));
-        }
-    });
-
     openAIWs.on('message', (message) => {
         const response = JSON.parse(message);
-        if (response.type === 'response.audio.delta' && ws.readyState === WebSocket.OPEN) {
-            const twilioMedia = {
-                event: "media",
-                media: { payload: response.audio }
-            };
-            ws.send(JSON.stringify(twilioMedia));
+        
+        if (response.type === 'response.audio.delta' && response.audio) {
+            // Reenviar la traducción en vivo a ambos extremos de la llamada
+            if (twilioWs && twilioWs.readyState === WebSocket.OPEN) {
+                twilioWs.send(JSON.stringify({ event: "media", media: { payload: response.audio } }));
+            }
+            if (browserWs && browserWs.readyState === WebSocket.OPEN) {
+                browserWs.send(JSON.stringify({ type: 'audio', payload: response.audio }));
+            }
         }
     });
+}
+
+wss.on('connection', (ws, req) => {
+    const pathname = url.parse(req.url).pathname;
+
+    if (pathname === '/browser-stream') {
+        console.log('Navegador móvil WebRTC enlazado al audio.');
+        browserWs = ws;
+        initOpenAI();
+
+        ws.on('message', (message) => {
+            if (openAIWs && openAIWs.readyState === WebSocket.OPEN) {
+                openAIWs.send(JSON.stringify({
+                    type: "input_audio_buffer.append",
+                    audio: message.toString()
+                }));
+            }
+        });
+
+        ws.on('close', () => { browserWs = null; });
+    } 
+    
+    else if (pathname === '/media-stream') {
+        console.log('Línea telefónica del proveedor activa.');
+        twilioWs = ws;
+        initOpenAI();
+
+        ws.on('message', (message) => {
+            const data = JSON.parse(message);
+            if (data.event === 'media' && openAIWs && openAIWs.readyState === WebSocket.OPEN) {
+                openAIWs.send(JSON.stringify({
+                    type: "input_audio_buffer.append",
+                    audio: data.media.payload
+                }));
+            }
+        });
+
+        ws.on('close', () => { twilioWs = null; });
+    }
 });
