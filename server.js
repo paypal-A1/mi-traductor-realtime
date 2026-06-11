@@ -18,27 +18,30 @@ if (!process.env.OPENAI_API_KEY) {
 }
 
 // ==========================================
-// RUTA INTELIGENTE PARA SERVIR EL FRONTEND
+// SERVIR ARCHIVOS ESTÁTICOS Y ENRUTAR FRONTEND
 // ==========================================
+// Habilita que Express busque cualquier recurso extra (estilos, logos) dentro de 'public'
+app.use(express.static(path.join(process.cwd(), 'public')));
+app.use(express.static(path.join(__dirname, 'public')));
+
 app.get('/', (req, res) => {
-    // Intentamos buscar el HTML en la raíz de ejecución de Render (cwd)
-    const pathDesdeCwd = path.join(process.cwd(), 'index.html');
-    // Alternativa secundaria basada en el directorio del script
-    const pathDesdeDirname = path.join(__dirname, 'index.html');
+    // Apuntamos directamente a la subcarpeta 'public' que descubriste en GitHub
+    const pathDesdeCwd = path.join(process.cwd(), 'public', 'index.html');
+    const pathDesdeDirname = path.join(__dirname, 'public', 'index.html');
 
     res.sendFile(pathDesdeCwd, (err) => {
         if (err) {
-            // Si el primero falla, intentamos con la ruta secundaria
+            // Intento secundario por si Render cambia el directorio de ejecución
             res.sendFile(pathDesdeDirname, (err2) => {
                 if (err2) {
-                    console.error("❌ [ERROR]: index.html no fue encontrado en ninguna de las rutas esperadas.");
+                    console.error("❌ [ERROR]: index.html no fue encontrado en la carpeta public.");
                     console.error("Ruta 1 (CWD):", pathDesdeCwd);
                     console.error("Ruta 2 (DIRNAME):", pathDesdeDirname);
                     
                     res.status(404).send(`
                         <h1>Archivo No Encontrado (404)</h1>
-                        <p>Express está activo, pero no se encuentra el archivo <strong>index.html</strong> en tu repositorio.</p>
-                        <p>Por favor, asegúrate de que el archivo 'index.html' esté guardado exactamente en la raíz de tu GitHub (al mismo nivel que server.js).</p>
+                        <p>Express está activo, pero no se encuentra el archivo <strong>index.html</strong> dentro de la carpeta <strong>public/</strong>.</p>
+                        <p>Verifica que el nombre esté exactamente en minúsculas y guardado ahí dentro.</p>
                     `);
                 }
             });
@@ -67,7 +70,6 @@ function encodeMuLawSample(sample) {
 }
 
 function decodeMuLawSample(mulawByte) {
-    // CORREGIDO: Se aplica y asigna la inversión de bits correctamente
     mulawByte = ~mulawByte;
     let sign = mulawByte & 0x80;
     let exponent = (mulawByte & 0x70) >> 4;
@@ -122,7 +124,6 @@ function iniciarSesionOpenAI(clientWs, idiomaDestino, tipoFlujo, twilioStreamSid
     openAiWs.on("open", () => {
         console.log("✅ Conectado a OpenAI con éxito.");
         
-        // Inicializar la configuración del idioma de salida según documentación GA
         const configuracionInicial = {
             type: "session.update",
             session: {
@@ -140,7 +141,6 @@ function iniciarSesionOpenAI(clientWs, idiomaDestino, tipoFlujo, twilioStreamSid
         try {
             const event = JSON.parse(data);
 
-            // Manejo de fragmentos de audio traducidos
             if (event.type === "session.output_audio.delta" && event.delta) {
                 if (tipoFlujo === "twilio" && twilioStreamSid) {
                     const pcmBuffer = Buffer.from(event.delta, 'base64');
@@ -161,7 +161,6 @@ function iniciarSesionOpenAI(clientWs, idiomaDestino, tipoFlujo, twilioStreamSid
                 }
             }
 
-            // Manejo de la transcripción del idioma traducido (Subtítulos de Destino)
             if (event.type === "session.output_transcript.delta" && event.delta) {
                 clientWs.send(JSON.stringify({
                     type: "transcript_target",
@@ -169,7 +168,6 @@ function iniciarSesionOpenAI(clientWs, idiomaDestino, tipoFlujo, twilioStreamSid
                 }));
             }
 
-            // Manejo de la transcripción del idioma original (Subtítulos de Origen)
             if (event.type === "session.input_transcript.delta" && event.delta) {
                 clientWs.send(JSON.stringify({
                     type: "transcript_source",
@@ -208,7 +206,6 @@ wss.on("connection", (ws, req) => {
     let openAiWs = null;
     let twilioStreamSid = null;
 
-    // CANAL 1: Conexión entrante desde la red telefónica de Twilio
     if (pathname === "/media-stream") {
         console.log("Línea telefónica activa.");
 
@@ -219,8 +216,6 @@ wss.on("connection", (ws, req) => {
                 if (msg.event === "start") {
                     twilioStreamSid = msg.start.streamSid;
                     console.log(`Enlace de audio Twilio fijado: ${twilioStreamSid}`);
-                    
-                    // Iniciamos la sesión de OpenAI por defecto traduciendo a Español
                     openAiWs = iniciarSesionOpenAI(ws, "es", "twilio", twilioStreamSid);
                 }
 
@@ -251,7 +246,6 @@ wss.on("connection", (ws, req) => {
             }
         });
 
-    // CANAL 2: Conexión entrante desde el Navegador Móvil WebRTC
     } else if (pathname === "/client-stream") {
         console.log("Navegador móvil WebRTC enlazado al audio.");
 
@@ -293,7 +287,6 @@ wss.on("connection", (ws, req) => {
 // ENDPOINTS HTTP (TwiML y Autenticación WebRTC)
 // ==========================================
 
-// Endpoint para responder a Twilio e iniciar el streaming de audio
 app.post('/twilio-twiml', (req, res) => {
     res.type('text/xml');
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -305,7 +298,6 @@ app.post('/twilio-twiml', (req, res) => {
     `);
 });
 
-// Endpoint para generar credenciales efímeras de cliente (WebRTC Frontend)
 app.post("/session", async (req, res) => {
     try {
         const language = req.body.targetLanguage ?? "es";
