@@ -94,10 +94,12 @@
         };
         
         ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (data.type === 'audio' && data.payload) {
-                playUlawBase64(data.payload);
-            }
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'audio' && data.payload) {
+                    playUlawBase64(data.payload);
+                }
+            } catch(e) { console.error(e); }
         };
 
         ws.onclose = () => {
