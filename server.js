@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
+const path = require('path'); // Requerido para mapear la ruta del HTML
 
 const app = express();
 app.use(express.json());
@@ -15,6 +16,13 @@ if (!process.env.OPENAI_API_KEY) {
     console.error("❌ [ERROR CRÍTICO]: La variable OPENAI_API_KEY no está definida en el entorno.");
     process.exit(1);
 }
+
+// ==========================================
+// RUTA PARA SERVIR EL FRONTEND (INDEX.HTML)
+// ==========================================
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
 
 // ==========================================
 // ALGORITMOS DE CONVERSIÓN DE AUDIO CRUDO
@@ -37,7 +45,7 @@ function encodeMuLawSample(sample) {
 }
 
 function decodeMuLawSample(mulawByte) {
-    mulawByte = ~mulawByte;
+    ~mulawByte;
     let sign = mulawByte & 0x80;
     let exponent = (mulawByte & 0x70) >> 4;
     let mantissa = mulawByte & 0x0F;
@@ -189,7 +197,7 @@ wss.on("connection", (ws, req) => {
                     twilioStreamSid = msg.start.streamSid;
                     console.log(`Enlace de audio Twilio fijado: ${twilioStreamSid}`);
                     
-                    // Iniciamos la sesión de OpenAI por defecto traduciendo a Español
+                    // Iniciamos la sesión de OpenAI por defecto traduciendo a 
                     openAiWs = iniciarSesionOpenAI(ws, "es", "twilio", twilioStreamSid);
                 }
 
