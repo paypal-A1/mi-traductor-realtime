@@ -5,7 +5,7 @@ const WebSocket = require('ws');
 const path = require('path');
 const twilio = require('twilio');
 
-const app = express(); // Corregido bug menor de asignación
+const app = report = express();
 app.use(express.static('public'));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
@@ -137,11 +137,9 @@ function initOpenAIToEnglish() {
         }
     });
 
-    // Variable para medir latencia de respuesta
-    openAIWsToEnglish.responseStartTime = null;
-
     openAIWsToEnglish.on('open', () => {
         console.log('✅ OpenAI [Canal Inglés] conectado con éxito.');
+        // CORRECCIÓN: Removemos 'modalities' para evitar el invalid_request_error
         openAIWsToEnglish.send(JSON.stringify({
             type: "session.update",
             session: { audio: { output: { language: "en" } } }
@@ -153,11 +151,6 @@ function initOpenAIToEnglish() {
             const response = JSON.parse(message);
             if (response.type === 'error') console.error('❌ [ERROR OPENAI EN]:', response.error);
 
-            // Monitoreo de inicio de respuesta de la IA
-            if (response.type === 'response.created') {
-                openAIWsToEnglish.responseStartTime = Date.now();
-            }
-
             if (response.type === 'session.input_transcript.delta') {
                 process.stdout.write(`🎙️ [Tu Micrófono dice]: ${response.delta}\n`);
             }
@@ -165,23 +158,12 @@ function initOpenAIToEnglish() {
                 process.stdout.write(`🇺🇸 [Traducción al Inglés generada]: ${response.delta}\n`);
             }
 
+            // OpenAI entrega 24kHz PCM16 -> Convertimos a 8kHz u-law para Twilio
             if (response.type === 'session.output_audio.delta' && response.delta) {
-                // Si es el primer paquete de esta respuesta, calcula el tiempo que tardó la IA
-                if (openAIWsToEnglish.responseStartTime) {
-                    const latency = Date.now() - openAIWsToEnglish.responseStartTime;
-                    console.log(`⏱️ [LATENCIA OPENAI -> INGLÉS]: ${latency}ms desde procesamiento hasta audio.`);
-                    openAIWsToEnglish.responseStartTime = null; // Reset para el siguiente turno
-                }
-
+                // LOG CRUCIAL: Nos dirá si OpenAI responde con voz
+                console.log(`🔊 [AUDIO -> TELÉFONO]: Reenviando paquete de voz traducido al Inglés.`);
                 if (twilioWs && twilioWs.readyState === WebSocket.OPEN && twilioStreamSid) {
-                    const startTranscode = Date.now();
                     const convertedAudio = openAIToTwilio(response.delta);
-                    const transcodeDuration = Date.now() - startTranscode;
-                    
-                    if (transcodeDuration > 5) {
-                        console.log(`⚡ [RENDIMIENTO CPU]: Transcodificación saliente tomó ${transcodeDuration}ms`);
-                    }
-
                     twilioWs.send(JSON.stringify({ 
                         event: "media", 
                         streamSid: twilioStreamSid, 
@@ -210,11 +192,9 @@ function initOpenAIToSpanish() {
         }
     });
 
-    // Variable para medir latencia de respuesta
-    openAIWsToSpanish.responseStartTime = null;
-
     openAIWsToSpanish.on('open', () => {
         console.log('✅ OpenAI [Canal Español] conectado con éxito.');
+        // CORRECCIÓN: Removemos 'modalities' para evitar el invalid_request_error
         openAIWsToSpanish.send(JSON.stringify({
             type: "session.update",
             session: { audio: { output: { language: "es" } } }
@@ -226,11 +206,6 @@ function initOpenAIToSpanish() {
             const response = JSON.parse(message);
             if (response.type === 'error') console.error('❌ [ERROR OPENAI ES]:', response.error);
 
-            // Monitoreo de inicio de respuesta de la IA
-            if (response.type === 'response.created') {
-                openAIWsToSpanish.responseStartTime = Date.now();
-            }
-
             if (response.type === 'session.input_transcript.delta') {
                 process.stdout.write(`📞 [El Teléfono dice]: ${response.delta}\n`);
             }
@@ -239,13 +214,8 @@ function initOpenAIToSpanish() {
             }
 
             if (response.type === 'session.output_audio.delta' && response.delta) {
-                // Si es el primer paquete de esta respuesta, calcula el tiempo que tardó la IA
-                if (openAIWsToSpanish.responseStartTime) {
-                    const latency = Date.now() - openAIWsToSpanish.responseStartTime;
-                    console.log(`⏱️ [LATENCIA OPENAI -> ESPAÑOL]: ${latency}ms desde procesamiento hasta audio.`);
-                    openAIWsToSpanish.responseStartTime = null; // Reset para el siguiente turno
-                }
-
+                // LOG CRUCIAL: Nos dirá si OpenAI responde con voz
+                console.log(`🔊 [AUDIO -> NAVEGADOR]: Reenviando paquete de voz traducido al Español.`);
                 if (browserWs && browserWs.readyState === WebSocket.OPEN) {
                     const convertedAudio = openAIToTwilio(response.delta);
                     browserWs.send(JSON.stringify({ type: 'audio', payload: convertedAudio }));
@@ -259,7 +229,6 @@ function initOpenAIToSpanish() {
     openAIWsToSpanish.on('close', () => { openAIWsToSpanish = null; });
     openAIWsToSpanish.on('error', (err) => console.error('Error Canal Español:', err));
 }
-
 wss.on('connection', (ws, req) => {
     const urlClara = new URL(req.url, `http://${req.headers.host}`);
     const pathname = urlClara.pathname;
@@ -275,6 +244,7 @@ wss.on('connection', (ws, req) => {
                     const base64Str = message.toString();
                     const ulawBuffer = Buffer.from(base64Str, 'base64');
                     
+                    // Convertimos el audio de la web (8kHz u-law) a 24kHz PCM para OpenAI
                     const convertedAudio = twilioToOpenAI(ulawBuffer);
                     
                     openAIWsToEnglish.send(JSON.stringify({
@@ -311,6 +281,7 @@ wss.on('connection', (ws, req) => {
                     }
 
                     if (openAIWsToSpanish && openAIWsToSpanish.readyState === WebSocket.OPEN) {
+                        // Twilio entrega 8kHz u-law -> Convertimos a 24kHz PCM16 antes de inyectar a OpenAI
                         const convertedAudio = twilioToOpenAI(Buffer.from(data.media.payload, 'base64'));
                         openAIWsToSpanish.send(JSON.stringify({
                             type: "session.input_audio_buffer.append",
