@@ -110,7 +110,9 @@
     async function startMicrophone() {
         try {
             globalStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+            
+            // Dejamos que el navegador use su tasa nativa real (44.1k o 48k)
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             source = audioCtx.createMediaStreamSource(globalStream);
             processor = audioCtx.createScriptProcessor(2048, 1, 1);
 
@@ -119,13 +121,28 @@
 
             processor.onaudioprocess = (e) => {
                 const inputData = e.inputBuffer.getChannelData(0);
-                const ulawBytes = new Uint8Array(inputData.length);
-                for (let i = 0; i < inputData.length; i++) {
-                    let sample = Math.min(1, Math.max(-1, inputData[i])) * 32767;
+                const inputSampleRate = audioCtx.sampleRate; // Tasa nativa del equipo
+                const outputSampleRate = 8000;              // Lo que requiere OpenAI
+                
+                // Calculamos el factor de reducción de velocidad
+                const ratio = inputSampleRate / outputSampleRate;
+                const outputLength = Math.floor(inputData.length / ratio);
+                const ulawBytes = new Uint8Array(outputLength);
+                
+                // Downsampling e interpolación limpia
+                for (let i = 0; i < outputLength; i++) {
+                    let inputIndex = Math.floor(i * ratio);
+                    let sample = inputData[inputIndex];
+                    sample = Math.min(1, Math.max(-1, sample)) * 32767; // Mantener límites de volumen
                     ulawBytes[i] = linear2ulaw(sample);
                 }
+
                 if (ws && ws.readyState === WebSocket.OPEN) {
-                    const base64Audio = btoa(String.fromCharCode.apply(null, ulawBytes));
+                    let binary = '';
+                    for (let i = 0; i < ulawBytes.length; i++) {
+                        binary += String.fromCharCode(ulawBytes[i]);
+                    }
+                    const base64Audio = btoa(binary);
                     ws.send(base64Audio);
                 }
             };
