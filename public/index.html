@@ -112,7 +112,9 @@
     async function startMicrophone() {
         try {
             globalStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+            }
             source = audioCtx.createMediaStreamSource(globalStream);
             processor = audioCtx.createScriptProcessor(2048, 1, 1);
 
@@ -165,7 +167,12 @@
     }
 
     function playUlawBase64(base64Data) {
-        if (!audioCtx) return;
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+        }
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
         const binaryString = atob(base64Data);
         const len = binaryString.length;
         const float32Data = new Float32Array(len);
