@@ -5,7 +5,7 @@ const WebSocket = require('ws');
 const path = require('path');
 const twilio = require('twilio');
 
-const app = report = express();
+const app = express(); // Corregido bug menor de asignación
 app.use(express.static('public'));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
@@ -125,15 +125,6 @@ let twilioStreamSid = null;
 
 let twilioPacketsIn = 0;
 
-// VARIABLES GLOBALES PARA CONTROL DE LATENCIA (TIMESTAMPS).
-let engSpeechStoppedTime = 0;
-let engResponseCreatedTime = 0;
-let engWaitingForFirstAudio = false;
-
-let espSpeechStoppedTime = 0;
-let espResponseCreatedTime = 0;
-let espWaitingForFirstAudio = false;
-
 function initOpenAIToEnglish() {
     if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) return;
 
@@ -145,6 +136,9 @@ function initOpenAIToEnglish() {
             "OpenAI-Safety-Identifier": "traductor-to-english-prod"
         }
     });
+
+    // Variable para medir latencia de respuesta
+    openAIWsToEnglish.responseStartTime = null;
 
     openAIWsToEnglish.on('open', () => {
         console.log('✅ OpenAI [Canal Inglés] conectado con éxito.');
@@ -159,16 +153,9 @@ function initOpenAIToEnglish() {
             const response = JSON.parse(message);
             if (response.type === 'error') console.error('❌ [ERROR OPENAI EN]:', response.error);
 
-            // DETECCIÓN DE LATENCIA: El usuario en el navegador dejó de hablar
-            if (response.type === 'input_audio_buffer.speech_stopped') {
-                engSpeechStoppedTime = Date.now();
-                engWaitingForFirstAudio = true;
-            }
-
-            // DETECCIÓN DE LATENCIA: OpenAI crea la respuesta internamente
+            // Monitoreo de inicio de respuesta de la IA
             if (response.type === 'response.created') {
-                engResponseCreatedTime = Date.now();
-                engWaitingForFirstAudio = true;
+                openAIWsToEnglish.responseStartTime = Date.now();
             }
 
             if (response.type === 'session.input_transcript.delta') {
@@ -178,26 +165,23 @@ function initOpenAIToEnglish() {
                 process.stdout.write(`🇺🇸 [Traducción al Inglés generada]: ${response.delta}\n`);
             }
 
-            // OpenAI entrega 24kHz PCM16 -> Convertimos a 8kHz u-law para Twilio
             if (response.type === 'session.output_audio.delta' && response.delta) {
-                
-                // CÁLCULO E IMPRESIÓN DE LATENCIA EN CONSOLA (Solo para el primer paquete del bloque)
-                if (engWaitingForFirstAudio) {
-                    const ahora = Date.now();
-                    const dePensamiento = engResponseCreatedTime > 0 ? (ahora - engResponseCreatedTime) : 0;
-                    const desdeSilencio = engSpeechStoppedTime > 0 ? (ahora - engSpeechStoppedTime) : 0;
-                    
-                    console.log(`\n⏱️  [MÉTRICA LATENCIA: MICRÓFONO ➡️ INGLÉS] -----------------------`);
-                    console.log(`   • IA Procesando (Pensar + Sintetizar Voz): ${dePensamiento} ms`);
-                    console.log(`   • Ventana total desde que guardaste silencio: ${desdeSilencio} ms`);
-                    console.log(`----------------------------------------------------------------\n`);
-                    
-                    engWaitingForFirstAudio = false; // Desactivamos hasta la siguiente intervención
+                // Si es el primer paquete de esta respuesta, calcula el tiempo que tardó la IA
+                if (openAIWsToEnglish.responseStartTime) {
+                    const latency = Date.now() - openAIWsToEnglish.responseStartTime;
+                    console.log(`⏱️ [LATENCIA OPENAI -> INGLÉS]: ${latency}ms desde procesamiento hasta audio.`);
+                    openAIWsToEnglish.responseStartTime = null; // Reset para el siguiente turno
                 }
 
-                console.log(`🔊 [AUDIO -> TELÉFONO]: Reenviando paquete de voz traducido al Inglés.`);
                 if (twilioWs && twilioWs.readyState === WebSocket.OPEN && twilioStreamSid) {
+                    const startTranscode = Date.now();
                     const convertedAudio = openAIToTwilio(response.delta);
+                    const transcodeDuration = Date.now() - startTranscode;
+                    
+                    if (transcodeDuration > 5) {
+                        console.log(`⚡ [RENDIMIENTO CPU]: Transcodificación saliente tomó ${transcodeDuration}ms`);
+                    }
+
                     twilioWs.send(JSON.stringify({ 
                         event: "media", 
                         streamSid: twilioStreamSid, 
@@ -226,6 +210,9 @@ function initOpenAIToSpanish() {
         }
     });
 
+    // Variable para medir latencia de respuesta
+    openAIWsToSpanish.responseStartTime = null;
+
     openAIWsToSpanish.on('open', () => {
         console.log('✅ OpenAI [Canal Español] conectado con éxito.');
         openAIWsToSpanish.send(JSON.stringify({
@@ -239,16 +226,9 @@ function initOpenAIToSpanish() {
             const response = JSON.parse(message);
             if (response.type === 'error') console.error('❌ [ERROR OPENAI ES]:', response.error);
 
-            // DETECCIÓN DE LATENCIA: La persona en el teléfono dejó de hablar
-            if (response.type === 'input_audio_buffer.speech_stopped') {
-                espSpeechStoppedTime = Date.now();
-                espWaitingForFirstAudio = true;
-            }
-
-            // DETECCIÓN DE LATENCIA: OpenAI crea la respuesta internamente
+            // Monitoreo de inicio de respuesta de la IA
             if (response.type === 'response.created') {
-                espResponseCreatedTime = Date.now();
-                espWaitingForFirstAudio = true;
+                openAIWsToSpanish.responseStartTime = Date.now();
             }
 
             if (response.type === 'session.input_transcript.delta') {
@@ -259,22 +239,13 @@ function initOpenAIToSpanish() {
             }
 
             if (response.type === 'session.output_audio.delta' && response.delta) {
-                
-                // CÁLCULO E IMPRESIÓN DE LATENCIA EN CONSOLA (Solo para el primer paquete del bloque)
-                if (espWaitingForFirstAudio) {
-                    const ahora = Date.now();
-                    const dePensamiento = espResponseCreatedTime > 0 ? (ahora - espResponseCreatedTime) : 0;
-                    const desdeSilencio = espSpeechStoppedTime > 0 ? (ahora - espSpeechStoppedTime) : 0;
-                    
-                    console.log(`\n⏱️  [MÉTRICA LATENCIA: TELÉFONO ➡️ ESPAÑOL] -----------------------`);
-                    console.log(`   • IA Procesando (Pensar + Sintetizar Voz): ${dePensamiento} ms`);
-                    console.log(`   • Ventana total desde que el teléfono guardó silencio: ${desdeSilencio} ms`);
-                    console.log(`----------------------------------------------------------------\n`);
-                    
-                    espWaitingForFirstAudio = false; // Desactivamos hasta la siguiente intervención
+                // Si es el primer paquete de esta respuesta, calcula el tiempo que tardó la IA
+                if (openAIWsToSpanish.responseStartTime) {
+                    const latency = Date.now() - openAIWsToSpanish.responseStartTime;
+                    console.log(`⏱️ [LATENCIA OPENAI -> ESPAÑOL]: ${latency}ms desde procesamiento hasta audio.`);
+                    openAIWsToSpanish.responseStartTime = null; // Reset para el siguiente turno
                 }
 
-                console.log(`🔊 [AUDIO -> NAVEGADOR]: Reenviando paquete de voz traducido al Español.`);
                 if (browserWs && browserWs.readyState === WebSocket.OPEN) {
                     const convertedAudio = openAIToTwilio(response.delta);
                     browserWs.send(JSON.stringify({ type: 'audio', payload: convertedAudio }));
@@ -303,6 +274,7 @@ wss.on('connection', (ws, req) => {
                 try {
                     const base64Str = message.toString();
                     const ulawBuffer = Buffer.from(base64Str, 'base64');
+                    
                     const convertedAudio = twilioToOpenAI(ulawBuffer);
                     
                     openAIWsToEnglish.send(JSON.stringify({
