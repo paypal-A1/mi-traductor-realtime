@@ -95,33 +95,51 @@ function initOpenAI() {
                 instructions: SYSTEM_INSTRUCTIONS,
                 voice: "alloy",
                 input_audio_format: "g711_ulaw",
-                output_audio_format: "g711_ulaw"
+                output_audio_format: "g711_ulaw",
+                turn_detection: {
+                    type: "server_vad",
+                    threshold: 0.5,          // Sensibilidad de detección (0.5 es ideal para llamadas)
+                    prefix_padding_ms: 300,
+                    silence_duration_ms: 600 // Espera 600 milisegundos de silencio para empezar a traducir
+                }
             }
         };
         openAIWs.send(JSON.stringify(sessionUpdate));
     });
 
     openAIWs.on('message', (message) => {
-        const response = JSON.parse(message);
-        
-        // CORRECCIÓN CRÍTICA: El objeto es response.delta, no response.audio
-        if (response.type === 'response.audio.delta' && response.delta) {
-            // Reenviar a Twilio usando su identificador obligatorio (streamSid)
-            if (twilioWs && twilioWs.readyState === WebSocket.OPEN && twilioStreamSid) {
-                twilioWs.send(JSON.stringify({ 
-                    event: "media", 
-                    streamSid: twilioStreamSid, 
-                    media: { payload: response.delta } 
-                }));
+        try {
+            const response = JSON.parse(message);
+            
+            // 📊 MONITOREO EN VIVO (Verás esto en los logs de Render)
+            if (response.type === 'error') {
+                console.error('❌ Error de OpenAI:', response.error);
             }
-            // Reenviar al navegador
-            if (browserWs && browserWs.readyState === WebSocket.OPEN) {
-                browserWs.send(JSON.stringify({ type: 'audio', payload: response.delta }));
+            if (response.type === 'input_audio_buffer.speech_started') {
+                console.log('🎙️ [OpenAI] Detectó voz... escuchando atentamente.');
             }
+            if (response.type === 'input_audio_buffer.speech_stopped') {
+                console.log('🤫 [OpenAI] Silencio detectado. Procesando la traducción ahora...');
+            }
+
+            // Envío de audio corregido
+            if (response.type === 'response.audio.delta' && response.delta) {
+                if (twilioWs && twilioWs.readyState === WebSocket.OPEN && twilioStreamSid) {
+                    twilioWs.send(JSON.stringify({ 
+                        event: "media", 
+                        streamSid: twilioStreamSid, 
+                        media: { payload: response.delta } 
+                    }));
+                }
+                if (browserWs && browserWs.readyState === WebSocket.OPEN) {
+                    browserWs.send(JSON.stringify({ type: 'audio', payload: response.delta }));
+                }
+            }
+        } catch (err) {
+            console.error("Error al procesar mensaje de OpenAI:", err);
         }
     });
 }
-
 wss.on('connection', (ws, req) => {
     const pathname = url.parse(req.url).pathname;
 
