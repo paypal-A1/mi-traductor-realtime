@@ -81,7 +81,6 @@ function initOpenAI() {
 
     console.log('Conectando con la API de traducción de OpenAI...');
     
-    // URL de producción requerida por el modelo gpt-realtime-translate
     openAIWs = new WebSocket('wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate', {
         headers: {
             "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -92,12 +91,14 @@ function initOpenAI() {
     openAIWs.on('open', () => {
         console.log('✅ Conectado a OpenAI de forma exitosa.');
         
-        // Estructura de actualización requerida para traducción dedicada
+        // CORRECCIÓN DE PARÁMETROS GA: Se remueve session.instructions obsoleto del bloque
         const sessionUpdate = {
             type: "session.update",
             session: {
-                instructions: SYSTEM_INSTRUCTIONS,
-                voice: "alloy"
+                voice: "alloy",
+                turn_detection: {
+                    type: "server_vad"
+                }
             }
         };
         openAIWs.send(JSON.stringify(sessionUpdate));
@@ -116,7 +117,6 @@ function initOpenAI() {
 
             // Captura los fragmentos de audio traducido (Deltas)
             if (response.type === 'session.output_audio.delta' && response.delta) {
-                // Enviar audio de traducción directo a la bocina del teléfono del proveedor (Twilio)
                 if (twilioWs && twilioWs.readyState === WebSocket.OPEN && twilioStreamSid) {
                     twilioWs.send(JSON.stringify({ 
                         event: "media", 
@@ -124,7 +124,6 @@ function initOpenAI() {
                         media: { payload: response.delta } 
                     }));
                 }
-                // Enviar el mismo audio de traducción a tus audífonos en la interfaz web
                 if (browserWs && browserWs.readyState === WebSocket.OPEN) {
                     browserWs.send(JSON.stringify({ type: 'audio', payload: response.delta }));
                 }
