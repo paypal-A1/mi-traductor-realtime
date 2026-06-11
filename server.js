@@ -118,6 +118,7 @@ let twilioWs = null;
 let browserWs = null;
 let twilioStreamSid = null;
 let twilioPacketsIn = 0;
+let browserKeepAlive = null;
 
 // === CANAL 1: Navegador (Español) → Inglés (para Twilio) ===
 function initOpenAIToEnglish() {
@@ -143,11 +144,15 @@ function initOpenAIToEnglish() {
     openAIWsToEnglish.on('message', (message) => {
         try {
             const response = JSON.parse(message);
-            if (response.type === 'error') console.error('❌ Error OpenAI EN:', response.error);
-
+            
+            if (response.type === 'error') {
+                console.error('❌ Error OpenAI EN:', response.error);
+            }
+            
             if (response.type === 'session.input_transcript.delta') {
                 console.log(`🎙️ [Micrófono]: ${response.delta}`);
             }
+            
             if (response.type === 'session.output_transcript.delta') {
                 console.log(`🇺🇸 [Traducción Inglés]: ${response.delta}`);
             }
@@ -209,11 +214,15 @@ function initOpenAIToSpanish() {
     openAIWsToSpanish.on('message', (message) => {
         try {
             const response = JSON.parse(message);
-            if (response.type === 'error') console.error('❌ Error OpenAI ES:', response.error);
-
+            
+            if (response.type === 'error') {
+                console.error('❌ Error OpenAI ES:', response.error);
+            }
+            
             if (response.type === 'session.input_transcript.delta') {
                 console.log(`📞 [Teléfono dice]: ${response.delta}`);
             }
+            
             if (response.type === 'session.output_transcript.delta') {
                 console.log(`🇪🇸 [Traducción Español]: ${response.delta}`);
             }
@@ -263,27 +272,59 @@ wss.on('connection', (ws, req) => {
     if (pathname === '/browser-stream') {
         console.log('🚀 Navegador vinculado.');
         browserWs = ws;
+        
+        // Limpiar keepalive anterior si existe
+        if (browserKeepAlive) clearInterval(browserKeepAlive);
+        
+        // Keepalive para mantener la conexión viva
+        browserKeepAlive = setInterval(() => {
+            if (browserWs && browserWs.readyState === WebSocket.OPEN) {
+                browserWs.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 25000);
+        
         initOpenAIToEnglish();
 
         ws.on('message', (message) => {
-            if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) {
-                try {
-                    const base64Str = message.toString();
-                    const ulawBuffer = Buffer.from(base64Str, 'base64');
+            try {
+                const msgStr = message.toString();
+                // Ignorar pings para no procesarlos como audio
+                if (msgStr.includes('ping') || msgStr.includes('"type":"ping"')) {
+                    return;
+                }
+                
+                if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) {
+                    const ulawBuffer = Buffer.from(msgStr, 'base64');
                     const convertedAudio = twilioToOpenAI(ulawBuffer);
                     
                     openAIWsToEnglish.send(JSON.stringify({
                         type: "session.input_audio_buffer.append",
                         audio: convertedAudio
                     }));
-                } catch (err) {
-                    console.error("Error al procesar audio del navegador:", err);
+                }
+            } catch (err) {
+                // Si no es JSON, asumir que es audio base64
+                if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) {
+                    try {
+                        const ulawBuffer = Buffer.from(message.toString(), 'base64');
+                        const convertedAudio = twilioToOpenAI(ulawBuffer);
+                        openAIWsToEnglish.send(JSON.stringify({
+                            type: "session.input_audio_buffer.append",
+                            audio: convertedAudio
+                        }));
+                    } catch (e) {
+                        console.error("Error al procesar audio del navegador:", e);
+                    }
                 }
             }
         });
 
         ws.on('close', () => { 
             browserWs = null;
+            if (browserKeepAlive) {
+                clearInterval(browserKeepAlive);
+                browserKeepAlive = null;
+            }
             console.log('🔌 Navegador desconectado');
         });
     } 
