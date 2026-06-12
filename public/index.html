@@ -89,6 +89,7 @@
         ws = new WebSocket(protocol + window.location.host + '/browser-stream');
         
         ws.onopen = () => {
+            console.log("✅ Navegador: WebSocket conectado");
             document.getElementById('statusMessage').style.color = '#2ecc71';
             document.getElementById('statusMessage').innerText = "Sistema Listo y Conectado";
         };
@@ -99,22 +100,30 @@
                 if (data.type === 'audio' && data.payload) {
                     console.log("📱 Navegador: Recibido paquete de audio del servidor, longitud:", data.payload.length);
                     playUlawBase64(data.payload);
+                } else {
+                    console.log("📩 Navegador: Mensaje recibido tipo:", data.type);
                 }
             } catch(e) { 
-                console.error("Error al parsear mensaje del servidor:", e);
+                console.error("❌ Navegador: Error al parsear mensaje:", e);
             }
         };
 
         ws.onclose = () => {
+            console.log("⚠️ Navegador: WebSocket cerrado");
             document.getElementById('statusMessage').style.color = '#e67e22';
             document.getElementById('statusMessage').innerText = "Reconectando audio...";
             setTimeout(connectWebSocket, 3000);
+        };
+        
+        ws.onerror = (err) => {
+            console.error("❌ Navegador: Error en WebSocket:", err);
         };
     }
 
     async function startMicrophone() {
         try {
             globalStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+            console.log("✅ Navegador: Micrófono activado");
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
             }
@@ -145,6 +154,7 @@
         if (globalStream) globalStream.getTracks().forEach(track => track.stop());
         if (processor) processor.disconnect();
         if (source) source.disconnect();
+        console.log("🔴 Navegador: Micrófono detenido");
     }
 
     function linear2ulaw(sample) {
