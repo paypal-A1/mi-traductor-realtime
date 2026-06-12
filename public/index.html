@@ -167,30 +167,30 @@
     }
 
     function playUlawBase64(base64Data) {
-        if (!audioCtx) {
-            // CORRECCIÓN: Eliminamos la restricción de sampleRate forzada al hardware del navegador
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        }
-        if (audioCtx.state === 'suspended') {
-            audioCtx.resume();
-        }
-        const binaryString = atob(base64Data);
-        const len = binaryString.length;
-        const float32Data = new Float32Array(len);
-        
-        for (let i = 0; i < len; i++) {
-            float32Data[i] = ulaw2linear(binaryString.charCodeAt(i)) / 32768;
-        }
-    
-        // Aquí sí le decimos que el buffer entrante es de 8000Hz para que lo estire correctamente al hardware nativo
-        const audioBuffer = audioCtx.createBuffer(1, len, 8000);
-        audioBuffer.getChannelData(0).set(float32Data);
-        
-        const bufferSource = audioCtx.createBufferSource();
-        bufferSource.buffer = audioBuffer;
-        bufferSource.connect(audioCtx.destination);
-        bufferSource.start();
+    if (!audioCtx) {
+        // CORRECCIÓN: Eliminamos la restricción de sampleRate forzada al hardware del navegador
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+    const binaryString = atob(base64Data);
+    const len = binaryString.length;
+    const float32Data = new Float32Array(len);
+    
+    for (let i = 0; i < len; i++) {
+        float32Data[i] = ulaw2linear(binaryString.charCodeAt(i)) / 32768;
+    }
+
+    // Aquí sí le decimos que el buffer entrante es de 8000Hz para que lo estire correctamente al hardware nativo
+    const audioBuffer = audioCtx.createBuffer(1, len, 8000);
+    audioBuffer.getChannelData(0).set(float32Data);
+    
+    const bufferSource = audioCtx.createBufferSource();
+    bufferSource.buffer = audioBuffer;
+    bufferSource.connect(audioCtx.destination);
+    bufferSource.start();
+}
     async function startCall() {
         const number = document.getElementById('phoneNumber').value;
         if(!number) return alert("Escribe un número válido");
