@@ -1,281 +1,339 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Consola Traductora de Llamadas</title>
-    <style>
-        body { font-family: Arial, sans-serif; text-align: center; background: #f4f7f6; padding: 20px; }
-        .phone-container { max-width: 350px; margin: 0 auto; background: white; padding: 30px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        .display { width: 100%; height: 50px; font-size: 24px; text-align: center; margin-bottom: 20px; border-radius: 10px; border: 1px solid #ccc; outline: none; box-sizing: border-box; }
-        .keyboard { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-        button { padding: 18px; font-size: 20px; border-radius: 10px; border: none; cursor: pointer; background: #e0e0e0; transition: background 0.1s; }
-        button:active { background: #d0d0d0; }
-        button.call { background: #2ecc71; color: white; grid-column: span 3; margin-top: 5px; }
-        button.hangup { background: #e74c3c; color: white; grid-column: span 3; margin-top: 5px; display: none; }
-        .status { margin-top: 15px; font-size: 14px; color: #e67e22; font-weight: bold; }
-        .history-section { margin-top: 25px; text-align: left; background: #f9f9f9; padding: 12px; border-radius: 10px; }
-        .history-title { font-size: 13px; font-weight: bold; color: #7f8c8d; margin-bottom: 8px; text-transform: uppercase; }
-        .history-item { display: flex; justify-content: space-between; align-items: center; padding: 8px; background: white; margin-bottom: 5px; border-radius: 6px; border: 1px solid #edeec4; cursor: pointer; font-size: 14px; }
-        .history-item:hover { background: #f1f2f6; }
-    </style>
-</head>
-<body>
+require('dotenv').config();
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
+const path = require('path');
+const twilio = require('twilio');
 
-<div class="phone-container">
-    <h2>Traductor Global</h2>
-    <input type="text" id="phoneNumber" class="display" placeholder="+1234567890" />
-    
-    <div class="keyboard">
-        <button onclick="press('1')">1</button><button onclick="press('2')">2</button><button onclick="press('3')">3</button>
-        <button onclick="press('4')">4</button><button onclick="press('5')">5</button><button onclick="press('6')">6</button>
-        <button onclick="press('7')">7</button><button onclick="press('8')">8</button><button onclick="press('9')">9</button>
-        <button onclick="press('+')">+</button><button onclick="press('0')">0</button><button onclick="backspace()">⌫</button>
-        
-        <button id="callBtn" class="call" onclick="startCall()">📞 Iniciar Llamada</button>
-        <button id="hangupBtn" class="hangup" onclick="endCall()">🛑 Finalizar Llamada</button>
-    </div>
+const app = express();
+app.use(express.static('public'));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
-    <div id="statusMessage" class="status">Conectando canales...</div>
+const PORT = process.env.PORT || 10000;
+const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-    <div class="history-section">
-        <div class="history-title">🕒 Recientes (Toca para cargar)</div>
-        <div id="historyList"></div>
-    </div>
-</div>
+let activeCallSid = null;
 
-<script>
-    let ws;
-    let audioCtx;
-    let processor;
-    let source;
-    let globalStream;
+// TABLAS DE CONVERSIÓN AUDIO
+const ulawToPcmTable = new Int16Array(256);
+const BIAS = 0x84;
 
-    function press(num) { document.getElementById('phoneNumber').value += num; }
-    
-    function backspace() {
-        let current = document.getElementById('phoneNumber').value;
-        document.getElementById('phoneNumber').value = current.slice(0, -1);
-    }
-
-    function loadHistory() {
-        const history = JSON.parse(localStorage.getItem('phoneHistory')) || [];
-        const container = document.getElementById('historyList');
-        container.innerHTML = '';
-        if(history.length === 0) {
-            container.innerHTML = '<span style="color:#aaa; font-size:12px;">No hay llamadas recientes</span>';
-            return;
-        }
-        history.forEach(num => {
-            const div = document.createElement('div');
-            div.className = 'history-item';
-            div.innerHTML = `<span>${num}</span><span style="color:#2ecc71; font-weight:bold;">⚡</span>`;
-            div.onclick = () => { document.getElementById('phoneNumber').value = num; };
-            container.appendChild(div);
-        });
-    }
-
-    function saveHistory(num) {
-        let history = JSON.parse(localStorage.getItem('phoneHistory')) || [];
-        history = history.filter(item => item !== num);
-        history.unshift(num);
-        if(history.length > 5) history.pop();
-        localStorage.setItem('phoneHistory', JSON.stringify(history));
-        loadHistory();
-    }
-
-    function connectWebSocket() {
-        const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-        ws = new WebSocket(protocol + window.location.host + '/browser-stream');
-        
-        ws.onopen = () => {
-            console.log("✅ Navegador: WebSocket conectado");
-            document.getElementById('statusMessage').style.color = '#2ecc71';
-            document.getElementById('statusMessage').innerText = "Sistema Listo y Conectado";
-        };
-        
-        ws.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                
-                // Ignorar el pulso de vida (ping)
-                if (data.type === 'ping') return;
-                
-                if (data.type === 'audio' && data.payload) {
-                    console.log("📱 Navegador: Recibido paquete de audio del servidor, longitud:", data.payload.length);
-                    playUlawBase64(data.payload);
-                } else {
-                    console.log("📩 Navegador: Mensaje recibido tipo:", data.type);
-                }
-            } catch(e) { 
-                console.error("❌ Navegador: Error al parsear mensaje:", e);
-            }
-        };
-
-        ws.onclose = () => {
-            console.log("⚠️ Navegador: WebSocket cerrado");
-            document.getElementById('statusMessage').style.color = '#e67e22';
-            document.getElementById('statusMessage').innerText = "Reconectando audio...";
-            setTimeout(connectWebSocket, 3000);
-        };
-        
-        ws.onerror = (err) => {
-            console.error("❌ Navegador: Error en WebSocket:", err);
-        };
-    }
-
-    async function startMicrophone() {
-        try {
-            globalStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-            console.log("✅ Navegador: Micrófono activado");
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
-            }
-            source = audioCtx.createMediaStreamSource(globalStream);
-            processor = audioCtx.createScriptProcessor(2048, 1, 1);
-
-            source.connect(processor);
-            processor.connect(audioCtx.destination);
-
-            processor.onaudioprocess = (e) => {
-                const inputData = e.inputBuffer.getChannelData(0);
-                const ulawBytes = new Uint8Array(inputData.length);
-                for (let i = 0; i < inputData.length; i++) {
-                    let sample = Math.min(1, Math.max(-1, inputData[i])) * 32767;
-                    ulawBytes[i] = linear2ulaw(sample);
-                }
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    const base64Audio = btoa(String.fromCharCode.apply(null, ulawBytes));
-                    ws.send(base64Audio);
-                }
-            };
-        } catch (err) {
-            alert("Por favor permite el acceso al micrófono.");
-        }
-    }
-
-    function stopMicrophone() {
-        if (globalStream) globalStream.getTracks().forEach(track => track.stop());
-        if (processor) processor.disconnect();
-        if (source) source.disconnect();
-        console.log("🔴 Navegador: Micrófono detenido");
-    }
-
-    function linear2ulaw(sample) {
-        let sign = (sample >> 8) & 0x80;
-        if (sample < 0) { sample = -sample; sign = 0x80; }
-        if (sample > 32635) sample = 32635;
-        sample += 0x84;
-        let exponent = 7;
-        for (let bit = 0x4000; (sample & bit) === 0 && exponent > 0; bit >>= 1) { exponent--; }
-        let mantissa = (sample >> (exponent + 3)) & 0x0F;
-        return ~(sign | (exponent << 4) | mantissa) & 0xFF;
-    }
-
-    function ulaw2linear(ulaw) {
-        ulaw = ~ulaw & 0xFF;
-        let sign = (ulaw & 0x80);
+function initAudioTables() {
+    for (let i = 0; i < 256; i++) {
+        let ulaw = ~i;
+        let sign = ulaw & 0x80;
         let exponent = (ulaw >> 4) & 0x07;
         let mantissa = ulaw & 0x0F;
-        let sample = (mantissa << 3) + 132;
-        sample <<= exponent;
-        sample -= 132;
-        return sign ? -sample : sample;
+        let sample = ((mantissa << 3) + BIAS) << exponent;
+        sample -= BIAS;
+        ulawToPcmTable[i] = sign ? -sample : sample;
     }
+}
+initAudioTables();
 
-    function playUlawBase64(base64Data) {
-        console.log("🔊 Navegador: Iniciando reproducción de audio...");
-        
-        if (!audioCtx) {
-            console.log("📁 Navegador: Creando nuevo AudioContext");
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function encodeMuLawSample(pcm) {
+    let sign = (pcm & 0x8000) >> 8;
+    if (pcm < 0) { pcm = -pcm; pcm -= 1; }
+    if (pcm > 32635) pcm = 32635;
+    pcm += BIAS;
+    let exponent = 7;
+    for (let mask = 0x4000; (pcm & mask) == 0 && exponent > 0; mask >>= 1) { exponent--; }
+    let mantissa = (pcm >> (exponent + 3)) & 0x0F;
+    return ~(sign | (exponent << 4) | mantissa) & 0xFF;
+}
+
+function twilioToOpenAI(ulawBuffer) {
+    const outBuffer = Buffer.alloc(ulawBuffer.length * 6);
+    let outIdx = 0;
+    for (let i = 0; i < ulawBuffer.length; i++) {
+        const pcmSample = ulawToPcmTable[ulawBuffer[i]];
+        for (let r = 0; r < 3; r++) {
+            outBuffer.writeInt16LE(pcmSample, outIdx);
+            outIdx += 2;
         }
-        
-        if (audioCtx.state === 'suspended') {
-            console.log("⚠️ Navegador: AudioContext suspendido, reanudando...");
-            audioCtx.resume().then(() => {
-                console.log("✅ Navegador: AudioContext reanudado correctamente");
-            }).catch(e => {
-                console.error("❌ Navegador: Error al reanudar AudioContext:", e);
-            });
+    }
+    return outBuffer.toString('base64');
+}
+
+function openAIToTwilio(pcmBase64) {
+    const inBuffer = Buffer.from(pcmBase64, 'base64');
+    const outBuffer = Buffer.alloc(Math.floor(inBuffer.length / 6));
+    let outIdx = 0;
+    for (let i = 0; i < inBuffer.length; i += 6) {
+        if (i + 1 < inBuffer.length) {
+            const pcmSample = inBuffer.readInt16LE(i);
+            outBuffer[outIdx++] = encodeMuLawSample(pcmSample);
+        }
+    }
+    return outBuffer.toString('base64');
+}
+
+app.post('/twiml', (req, res) => {
+    res.type('text/xml');
+    res.send(`
+        <Response>
+            <Connect>
+                <Stream url="wss://${req.headers.host}/media-stream" />
+            </Connect>
+        </Response>
+    `);
+});
+
+app.post('/make-call', async (req, res) => {
+    const { toPhoneNumber } = req.body;
+    try {
+        const call = await client.calls.create({
+            url: `https://${req.headers.host}/twiml`,
+            to: toPhoneNumber,
+            from: process.env.TWILIO_NUMBER || '+18633445321'
+        });
+        activeCallSid = call.sid;
+        res.status(200).json({ success: true, callSid: call.sid });
+    } catch (error) {
+        console.error('Error al realizar la llamada:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/hangup', async (req, res) => {
+    try {
+        if (activeCallSid) {
+            await client.calls(activeCallSid).update({ status: 'completed' });
+            activeCallSid = null;
+            res.status(200).json({ success: true });
         } else {
-            console.log("✅ Navegador: AudioContext activo, estado:", audioCtx.state);
+            res.status(400).json({ success: false, error: "No hay llamada activa" });
         }
-        
+    } catch (error) {
+        console.error('Error al colgar:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+const server = app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
+const wss = new WebSocket.Server({ server });
+
+let openAIWsToEnglish = null;
+let openAIWsToSpanish = null;
+let twilioWs = null;
+let browserWs = null;
+let twilioStreamSid = null;
+let twilioPacketsIn = 0;
+let browserKeepAliveInterval = null;
+
+function initOpenAIToEnglish() {
+    if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) return;
+
+    console.log('Conectando a OpenAI [Canal Español ➡️ Inglés]... 🇺🇸');
+    
+    openAIWsToEnglish = new WebSocket('wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate', {
+        headers: {
+            "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+            "OpenAI-Safety-Identifier": "traductor-to-english-prod"
+        }
+    });
+
+    openAIWsToEnglish.on('open', () => {
+        console.log('✅ OpenAI [Canal Inglés] conectado con éxito.');
+        openAIWsToEnglish.send(JSON.stringify({
+            type: "session.update",
+            session: { audio: { output: { language: "en" } } }
+        }));
+    });
+
+    openAIWsToEnglish.on('message', (message) => {
         try {
-            const binaryString = atob(base64Data);
-            const len = binaryString.length;
-            console.log(`📊 Navegador: Decodificando ${len} bytes de audio ulaw`);
-            
-            const float32Data = new Float32Array(len);
-            for (let i = 0; i < len; i++) {
-                float32Data[i] = ulaw2linear(binaryString.charCodeAt(i)) / 32768;
+            const response = JSON.parse(message);
+            if (response.type === 'error') console.error('❌ [ERROR OPENAI EN]:', response.error);
+
+            if (response.type === 'session.input_transcript.delta') {
+                process.stdout.write(`🎙️ [Tu Micrófono dice]: ${response.delta}\n`);
             }
-            
-            const audioBuffer = audioCtx.createBuffer(1, len, 8000);
-            audioBuffer.getChannelData(0).set(float32Data);
-            
-            const bufferSource = audioCtx.createBufferSource();
-            bufferSource.buffer = audioBuffer;
-            bufferSource.connect(audioCtx.destination);
-            bufferSource.start();
-            
-            console.log("✅ Navegador: Audio enviado a los altavoces");
+            if (response.type === 'session.output_transcript.delta') {
+                process.stdout.write(`🇺🇸 [Traducción al Inglés generada]: ${response.delta}\n`);
+            }
+
+            if (response.type === 'session.output_audio.delta' && response.delta) {
+                console.log(`🔊 [AUDIO -> TELÉFONO]: Reenviando paquete de voz traducido al Inglés.`);
+                
+                if (!twilioWs) {
+                    console.log(`❌ [ERROR] twilioWs es NULL, no se puede enviar audio al teléfono`);
+                } else if (twilioWs.readyState !== WebSocket.OPEN) {
+                    console.log(`❌ [ERROR] twilioWs estado: ${twilioWs.readyState} (debe ser 1 = OPEN)`);
+                } else if (!twilioStreamSid) {
+                    console.log(`❌ [ERROR] twilioStreamSid es NULL, no se puede enviar audio`);
+                } else {
+                    console.log(`✅ twilioWs OK, enviando audio al teléfono...`);
+                    const convertedAudio = openAIToTwilio(response.delta);
+                    console.log(`📊 Longitud del audio convertido: ${convertedAudio.length} caracteres base64`);
+                    twilioWs.send(JSON.stringify({ 
+                        event: "media", 
+                        streamSid: twilioStreamSid, 
+                        media: { payload: convertedAudio } 
+                    }));
+                    console.log(`✅ Audio enviado al teléfono correctamente`);
+                }
+            }
         } catch (e) {
-            console.error("❌ Navegador: Error reproduciendo audio:", e);
+            console.error("Error en mensaje Canal Inglés:", e);
         }
-    }
+    });
 
-    async function startCall() {
-        const number = document.getElementById('phoneNumber').value;
-        if(!number) return alert("Escribe un número válido");
-        
-        document.getElementById('callBtn').style.display = 'none';
-        document.getElementById('hangupBtn').style.display = 'block';
-        document.getElementById('statusMessage').innerText = "Marcando...";
-        
-        saveHistory(number);
-        await startMicrophone();
+    openAIWsToEnglish.on('close', () => { openAIWsToEnglish = null; });
+    openAIWsToEnglish.on('error', (err) => console.error('Error Canal Inglés:', err));
+}
 
+function initOpenAIToSpanish() {
+    if (openAIWsToSpanish && openAIWsToSpanish.readyState === WebSocket.OPEN) return;
+
+    console.log('Conectando a OpenAI [Canal Inglés ➡️ Español]... 🇪🇸');
+    
+    openAIWsToSpanish = new WebSocket('wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate', {
+        headers: {
+            "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+            "OpenAI-Safety-Identifier": "traductor-to-spanish-prod"
+        }
+    });
+
+    openAIWsToSpanish.on('open', () => {
+        console.log('✅ OpenAI [Canal Español] conectado con éxito.');
+        openAIWsToSpanish.send(JSON.stringify({
+            type: "session.update",
+            session: { audio: { output: { language: "es" } } }
+        }));
+    });
+
+    openAIWsToSpanish.on('message', (message) => {
         try {
-            const response = await fetch('/make-call', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ toPhoneNumber: number })
-            });
-            
-            const result = await response.json();
-            if(result.success) {
-                document.getElementById('statusMessage').innerText = "Llamada en curso...";
-            } else {
-                alert("Error de Twilio: " + result.error);
-                resetButtons();
+            const response = JSON.parse(message);
+            if (response.type === 'error') console.error('❌ [ERROR OPENAI ES]:', response.error);
+
+            if (response.type === 'session.input_transcript.delta') {
+                process.stdout.write(`📞 [El Teléfono dice]: ${response.delta}\n`);
             }
-        } catch (error) {
-            alert("Error de red al enlazar llamada.");
-            resetButtons();
+            if (response.type === 'session.output_transcript.delta') {
+                process.stdout.write(`🇪🇸 [Traducción al Español generada]: ${response.delta}\n`);
+            }
+
+            if (response.type === 'session.output_audio.delta' && response.delta) {
+                console.log(`🔊 [AUDIO -> NAVEGADOR]: Reenviando paquete de voz traducido al Español.`);
+                
+                if (!browserWs) {
+                    console.log(`❌ [ERROR] browserWs es NULL, no se puede enviar audio al navegador`);
+                } else if (browserWs.readyState !== WebSocket.OPEN) {
+                    console.log(`❌ [ERROR] browserWs estado: ${browserWs.readyState} (debe ser 1 = OPEN)`);
+                } else {
+                    console.log(`✅ browserWs OK, enviando audio al navegador...`);
+                    const convertedAudio = openAIToTwilio(response.delta);
+                    console.log(`📊 Longitud del audio convertido: ${convertedAudio.length} caracteres base64`);
+                    browserWs.send(JSON.stringify({ type: 'audio', payload: convertedAudio }));
+                    console.log(`✅ Audio enviado al navegador correctamente`);
+                }
+            }
+        } catch (e) {
+            console.error("Error en mensaje Canal Español:", e);
         }
-    }
+    });
 
-    async function endCall() {
-        document.getElementById('statusMessage').innerText = "Cortando conexión...";
-        try {
-            await fetch('/hangup', { method: 'POST' });
-        } catch(e) { console.error(e); }
-        stopMicrophone();
-        resetButtons();
-        document.getElementById('statusMessage').innerText = "Llamada finalizada de forma segura.";
-    }
+    openAIWsToSpanish.on('close', () => { openAIWsToSpanish = null; });
+    openAIWsToSpanish.on('error', (err) => console.error('Error Canal Español:', err));
+}
 
-    function resetButtons() {
-        document.getElementById('callBtn').style.display = 'block';
-        document.getElementById('hangupBtn').style.display = 'none';
-    }
+wss.on('connection', (ws, req) => {
+    const urlClara = new URL(req.url, `http://${req.headers.host}`);
+    const pathname = urlClara.pathname;
 
-    window.onload = () => {
-        connectWebSocket();
-        loadHistory();
-    };
-</script>
-</body>
-</html>
+    if (pathname === '/browser-stream') {
+        console.log('🚀 Navegador vinculado.');
+        browserWs = ws;
+        
+        // Iniciar keepalive (pulso) mientras no haya llamada
+        if (browserKeepAliveInterval) clearInterval(browserKeepAliveInterval);
+        browserKeepAliveInterval = setInterval(() => {
+            if (browserWs && browserWs.readyState === WebSocket.OPEN) {
+                browserWs.send(JSON.stringify({ type: 'ping' }));
+                console.log('💓 Keepalive enviado al navegador');
+            } else {
+                if (browserKeepAliveInterval) clearInterval(browserKeepAliveInterval);
+                browserKeepAliveInterval = null;
+            }
+        }, 15000);
+        
+        initOpenAIToEnglish();
+
+        ws.on('message', (message) => {
+            if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) {
+                try {
+                    const base64Str = message.toString();
+                    const ulawBuffer = Buffer.from(base64Str, 'base64');
+                    const convertedAudio = twilioToOpenAI(ulawBuffer);
+                    
+                    openAIWsToEnglish.send(JSON.stringify({
+                        type: "session.input_audio_buffer.append",
+                        audio: convertedAudio
+                    }));
+                } catch (err) {
+                    console.error("Error al procesar audio del navegador:", err);
+                }
+            }
+        });
+
+        ws.on('close', () => { 
+            browserWs = null;
+            if (browserKeepAliveInterval) {
+                clearInterval(browserKeepAliveInterval);
+                browserKeepAliveInterval = null;
+            }
+            console.log('🔌 Navegador desconectado');
+        });
+    } 
+    
+    else if (pathname === '/media-stream') {
+        console.log('🚀 Twilio vinculado.');
+        twilioWs = ws;
+        
+        // Matar el keepalive porque la llamada ya va a mantener la conexión viva
+        if (browserKeepAliveInterval) {
+            clearInterval(browserKeepAliveInterval);
+            browserKeepAliveInterval = null;
+            console.log('🔄 Keepalive desactivado (llamada iniciada)');
+        }
+        
+        initOpenAIToSpanish();
+
+        ws.on('message', (message) => {
+            try {
+                const data = JSON.parse(message);
+                
+                if (data.event === 'start') {
+                    twilioStreamSid = data.start.streamSid;
+                    console.log(`📞 Enlace Twilio fijado: ${twilioStreamSid}`);
+                }
+
+                if (data.event === 'media') {
+                    twilioPacketsIn++;
+                    if (twilioPacketsIn % 100 === 0) {
+                        console.log(`📥 [DIAGNÓSTICO]: Procesando audio de Twilio... (${twilioPacketsIn} paquetes)`);
+                    }
+
+                    if (openAIWsToSpanish && openAIWsToSpanish.readyState === WebSocket.OPEN) {
+                        const convertedAudio = twilioToOpenAI(Buffer.from(data.media.payload, 'base64'));
+                        openAIWsToSpanish.send(JSON.stringify({
+                            type: "session.input_audio_buffer.append",
+                            audio: convertedAudio
+                        }));
+                    }
+                }
+            } catch (err) {
+                console.error("Error en flujo Twilio:", err);
+            }
+        });
+
+        ws.on('close', () => { 
+            twilioWs = null; 
+            twilioStreamSid = null;
+            console.log('🔌 Twilio desconectado');
+        });
+    }
+});
