@@ -5,7 +5,7 @@ const WebSocket = require('ws');
 const path = require('path');
 const twilio = require('twilio');
 
-const app = report = express();
+const app = express();
 app.use(express.static('public'));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
@@ -139,7 +139,6 @@ function initOpenAIToEnglish() {
 
     openAIWsToEnglish.on('open', () => {
         console.log('✅ OpenAI [Canal Inglés] conectado con éxito.');
-        // CORRECCIÓN: Removemos 'modalities' para evitar el invalid_request_error
         openAIWsToEnglish.send(JSON.stringify({
             type: "session.update",
             session: { audio: { output: { language: "en" } } }
@@ -160,7 +159,6 @@ function initOpenAIToEnglish() {
 
             // OpenAI entrega 24kHz PCM16 -> Convertimos a 8kHz u-law para Twilio
             if (response.type === 'session.output_audio.delta' && response.delta) {
-                // LOG CRUCIAL: Nos dirá si OpenAI responde con voz
                 console.log(`🔊 [AUDIO -> TELÉFONO]: Reenviando paquete de voz traducido al Inglés.`);
                 if (twilioWs && twilioWs.readyState === WebSocket.OPEN && twilioStreamSid) {
                     const convertedAudio = openAIToTwilio(response.delta);
@@ -194,7 +192,6 @@ function initOpenAIToSpanish() {
 
     openAIWsToSpanish.on('open', () => {
         console.log('✅ OpenAI [Canal Español] conectado con éxito.');
-        // CORRECCIÓN: Removemos 'modalities' para evitar el invalid_request_error
         openAIWsToSpanish.send(JSON.stringify({
             type: "session.update",
             session: { audio: { output: { language: "es" } } }
@@ -214,11 +211,19 @@ function initOpenAIToSpanish() {
             }
 
             if (response.type === 'session.output_audio.delta' && response.delta) {
-                // LOG CRUCIAL: Nos dirá si OpenAI responde con voz
                 console.log(`🔊 [AUDIO -> NAVEGADOR]: Reenviando paquete de voz traducido al Español.`);
-                if (browserWs && browserWs.readyState === WebSocket.OPEN) {
+                
+                // LOGS DE DIAGNÓSTICO (solo estos se agregaron)
+                if (!browserWs) {
+                    console.log(`❌ [ERROR] browserWs es NULL, no se puede enviar audio al navegador`);
+                } else if (browserWs.readyState !== WebSocket.OPEN) {
+                    console.log(`❌ [ERROR] browserWs estado: ${browserWs.readyState} (debe ser 1 = OPEN)`);
+                } else {
+                    console.log(`✅ browserWs OK, enviando audio...`);
                     const convertedAudio = openAIToTwilio(response.delta);
+                    console.log(`📊 Longitud del audio convertido: ${convertedAudio.length} caracteres base64`);
                     browserWs.send(JSON.stringify({ type: 'audio', payload: convertedAudio }));
+                    console.log(`✅ Audio enviado al navegador correctamente`);
                 }
             }
         } catch (e) {
