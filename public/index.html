@@ -154,11 +154,21 @@
     }
 
     document.getElementById('activarSonidoBtn').onclick = async () => {
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
         await audioCtx.resume();
+        
+        // Crear y reproducir un silencio para "desbloquear" el audio
+        const silence = audioCtx.createBuffer(1, 1, 22050);
+        const source = audioCtx.createBufferSource();
+        source.buffer = silence;
+        source.connect(audioCtx.destination);
+        source.start();
+        
         document.getElementById('statusMessage').innerText = "✅ Sonido activado";
+        document.getElementById('statusMessage').style.color = '#2ecc71';
     };
-
     window.onload = () => { connectWebSocket(); };
 </script>
 </body>
