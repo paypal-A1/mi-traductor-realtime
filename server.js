@@ -15,7 +15,7 @@ const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TO
 
 let activeCallSid = null;
 
-// TABLAS DE CONVERSIÓN AUDIO (Tablas de búsqueda rápida para evitar latencia)
+// TABLAS DE CONVERSIÓN AUDIO
 const ulawToPcmTable = new Int16Array(256);
 const BIAS = 0x84;
 
@@ -43,13 +43,12 @@ function encodeMuLawSample(pcm) {
     return ~(sign | (exponent << 4) | mantissa) & 0xFF;
 }
 
-// CONVERSOR 1: Teléfono/Navegador (8kHz u-law) ➡️ OpenAI (24kHz PCM16)
 function twilioToOpenAI(ulawBuffer) {
     const outBuffer = Buffer.alloc(ulawBuffer.length * 6);
     let outIdx = 0;
     for (let i = 0; i < ulawBuffer.length; i++) {
         const pcmSample = ulawToPcmTable[ulawBuffer[i]];
-        for (let r = 0; r < 3; r++) { // Triplicamos la tasa de muestreo (8kHz -> 24kHz)
+        for (let r = 0; r < 3; r++) {
             outBuffer.writeInt16LE(pcmSample, outIdx);
             outIdx += 2;
         }
@@ -57,12 +56,11 @@ function twilioToOpenAI(ulawBuffer) {
     return outBuffer.toString('base64');
 }
 
-// CONVERSOR 2: OpenAI (24kHz PCM16) ➡️ Teléfono/Navegador (8kHz u-law)
 function openAIToTwilio(pcmBase64) {
     const inBuffer = Buffer.from(pcmBase64, 'base64');
     const outBuffer = Buffer.alloc(Math.floor(inBuffer.length / 6));
     let outIdx = 0;
-    for (let i = 0; i < inBuffer.length; i += 6) { // Reducimos la tasa de muestreo tomando 1 de cada 3 muestras
+    for (let i = 0; i < inBuffer.length; i += 6) {
         if (i + 1 < inBuffer.length) {
             const pcmSample = inBuffer.readInt16LE(i);
             outBuffer[outIdx++] = encodeMuLawSample(pcmSample);
@@ -113,16 +111,14 @@ app.post('/hangup', async (req, res) => {
     }
 });
 
-const server = app.listen(PORT, () => console.log(`Servidor de traducción con Transcodificación corriendo en puerto ${PORT}`));
+const server = app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
 const wss = new WebSocket.Server({ server });
 
-let openAIWsToEnglish = null; 
-let openAIWsToSpanish = null; 
-
+let openAIWsToEnglish = null;
+let openAIWsToSpanish = null;
 let twilioWs = null;
 let browserWs = null;
 let twilioStreamSid = null;
-
 let twilioPacketsIn = 0;
 
 function initOpenAIToEnglish() {
@@ -157,16 +153,26 @@ function initOpenAIToEnglish() {
                 process.stdout.write(`🇺🇸 [Traducción al Inglés generada]: ${response.delta}\n`);
             }
 
-            // OpenAI entrega 24kHz PCM16 -> Convertimos a 8kHz u-law para Twilio
             if (response.type === 'session.output_audio.delta' && response.delta) {
                 console.log(`🔊 [AUDIO -> TELÉFONO]: Reenviando paquete de voz traducido al Inglés.`);
-                if (twilioWs && twilioWs.readyState === WebSocket.OPEN && twilioStreamSid) {
+                
+                // LOGS DE DIAGNÓSTICO PARA CANAL INGLÉS (tú → teléfono)
+                if (!twilioWs) {
+                    console.log(`❌ [ERROR] twilioWs es NULL, no se puede enviar audio al teléfono`);
+                } else if (twilioWs.readyState !== WebSocket.OPEN) {
+                    console.log(`❌ [ERROR] twilioWs estado: ${twilioWs.readyState} (debe ser 1 = OPEN)`);
+                } else if (!twilioStreamSid) {
+                    console.log(`❌ [ERROR] twilioStreamSid es NULL, no se puede enviar audio`);
+                } else {
+                    console.log(`✅ twilioWs OK, enviando audio al teléfono...`);
                     const convertedAudio = openAIToTwilio(response.delta);
+                    console.log(`📊 Longitud del audio convertido: ${convertedAudio.length} caracteres base64`);
                     twilioWs.send(JSON.stringify({ 
                         event: "media", 
                         streamSid: twilioStreamSid, 
                         media: { payload: convertedAudio } 
                     }));
+                    console.log(`✅ Audio enviado al teléfono correctamente`);
                 }
             }
         } catch (e) {
@@ -213,13 +219,13 @@ function initOpenAIToSpanish() {
             if (response.type === 'session.output_audio.delta' && response.delta) {
                 console.log(`🔊 [AUDIO -> NAVEGADOR]: Reenviando paquete de voz traducido al Español.`);
                 
-                // LOGS DE DIAGNÓSTICO (solo estos se agregaron)
+                // LOGS DE DIAGNÓSTICO PARA CANAL ESPAÑOL (teléfono → tú)
                 if (!browserWs) {
                     console.log(`❌ [ERROR] browserWs es NULL, no se puede enviar audio al navegador`);
                 } else if (browserWs.readyState !== WebSocket.OPEN) {
                     console.log(`❌ [ERROR] browserWs estado: ${browserWs.readyState} (debe ser 1 = OPEN)`);
                 } else {
-                    console.log(`✅ browserWs OK, enviando audio...`);
+                    console.log(`✅ browserWs OK, enviando audio al navegador...`);
                     const convertedAudio = openAIToTwilio(response.delta);
                     console.log(`📊 Longitud del audio convertido: ${convertedAudio.length} caracteres base64`);
                     browserWs.send(JSON.stringify({ type: 'audio', payload: convertedAudio }));
@@ -249,8 +255,6 @@ wss.on('connection', (ws, req) => {
                 try {
                     const base64Str = message.toString();
                     const ulawBuffer = Buffer.from(base64Str, 'base64');
-                    
-                    // Convertimos el audio de la web (8kHz u-law) a 24kHz PCM para OpenAI
                     const convertedAudio = twilioToOpenAI(ulawBuffer);
                     
                     openAIWsToEnglish.send(JSON.stringify({
@@ -263,7 +267,10 @@ wss.on('connection', (ws, req) => {
             }
         });
 
-        ws.on('close', () => { browserWs = null; });
+        ws.on('close', () => { 
+            browserWs = null;
+            console.log('🔌 Navegador desconectado');
+        });
     } 
     
     else if (pathname === '/media-stream') {
@@ -277,17 +284,16 @@ wss.on('connection', (ws, req) => {
                 
                 if (data.event === 'start') {
                     twilioStreamSid = data.start.streamSid;
-                    console.log(` Enlace fijado: ${twilioStreamSid}`);
+                    console.log(`📞 Enlace Twilio fijado: ${twilioStreamSid}`);
                 }
 
                 if (data.event === 'media') {
                     twilioPacketsIn++;
                     if (twilioPacketsIn % 100 === 0) {
-                        console.log(`📥 [DIAGNÓSTICO]: Procesando y convirtiendo audio de Twilio... (${twilioPacketsIn} paquetes)`);
+                        console.log(`📥 [DIAGNÓSTICO]: Procesando audio de Twilio... (${twilioPacketsIn} paquetes)`);
                     }
 
                     if (openAIWsToSpanish && openAIWsToSpanish.readyState === WebSocket.OPEN) {
-                        // Twilio entrega 8kHz u-law -> Convertimos a 24kHz PCM16 antes de inyectar a OpenAI
                         const convertedAudio = twilioToOpenAI(Buffer.from(data.media.payload, 'base64'));
                         openAIWsToSpanish.send(JSON.stringify({
                             type: "session.input_audio_buffer.append",
@@ -303,6 +309,7 @@ wss.on('connection', (ws, req) => {
         ws.on('close', () => { 
             twilioWs = null; 
             twilioStreamSid = null;
+            console.log('🔌 Twilio desconectado');
         });
     }
 });
