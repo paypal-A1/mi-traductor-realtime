@@ -13,7 +13,7 @@
         button:active { background: #d0d0d0; }
         button.call { background: #2ecc71; color: white; grid-column: span 3; margin-top: 5px; }
         button.hangup { background: #e74c3c; color: white; grid-column: span 3; margin-top: 5px; display: none; }
-        .status { margin-top: 15px; font-size: 14px; color: #e67e22; font-weight: bold; }
+        .status { margin-top: 15px; font-size: 14px; font-weight: bold; }
         .history-section { margin-top: 25px; text-align: left; background: #f9f9f9; padding: 12px; border-radius: 10px; }
         .history-title { font-size: 13px; font-weight: bold; color: #7f8c8d; margin-bottom: 8px; text-transform: uppercase; }
         .history-item { display: flex; justify-content: space-between; align-items: center; padding: 8px; background: white; margin-bottom: 5px; border-radius: 6px; border: 1px solid #edeec4; cursor: pointer; font-size: 14px; }
@@ -68,8 +68,8 @@
             return;
         }
         history.forEach(item => {
-            const num = typeof item === 'string' ? item : item.number;
-            const duration = typeof item === 'object' && item.duration ? item.duration : null;
+            const num = item.number;
+            const duration = item.duration ? item.duration : null;
             const div = document.createElement('div');
             div.className = 'history-item';
             div.innerHTML = `<span>${num}</span><span style="color:#2ecc71; font-weight:bold;">${duration ? duration + 's' : '⚡'}</span>`;
@@ -80,13 +80,10 @@
 
     function saveHistory(num, duration) {
         let history = JSON.parse(localStorage.getItem('phoneHistory')) || [];
-        const existingIndex = history.findIndex(item => (typeof item === 'string' ? item : item.number) === num);
-        const newItem = { number: num, duration: duration };
-        if (existingIndex !== -1) {
-            history.splice(existingIndex, 1);
-        }
-        history.unshift(newItem);
-        if (history.length > 5) history.pop();
+        // Guardar cada llamada como un registro independiente (sin eliminar duplicados)
+        history.unshift({ number: num, duration: duration, timestamp: Date.now() });
+        // Mantener solo las últimas 50 llamadas
+        if (history.length > 50) history.pop();
         localStorage.setItem('phoneHistory', JSON.stringify(history));
         loadHistory();
     }
@@ -98,7 +95,7 @@
         ws.onopen = () => {
             console.log("✅ Navegador: WebSocket conectado");
             document.getElementById('statusMessage').style.color = '#2ecc71';
-            document.getElementById('statusMessage').innerText = "Sistema Listo y Conectado";
+            document.getElementById('statusMessage').innerText = "✅ Sistema Listo y Conectado";
         };
         
         ws.onmessage = (event) => {
@@ -119,8 +116,8 @@
 
         ws.onclose = () => {
             console.log("⚠️ Navegador: WebSocket cerrado");
-            document.getElementById('statusMessage').style.color = '#e67e22';
-            document.getElementById('statusMessage').innerText = "Reconectando audio...";
+            document.getElementById('statusMessage').style.color = '#e74c3c';
+            document.getElementById('statusMessage').innerText = "⚠️ Sistema no disponible";
             setTimeout(connectWebSocket, 3000);
         };
         
@@ -250,6 +247,7 @@
             
             const result = await response.json();
             if(result.success) {
+                document.getElementById('statusMessage').style.color = '#2ecc71';
                 document.getElementById('statusMessage').innerText = "Llamada en curso...";
             } else {
                 alert("Error de Twilio: " + result.error);
@@ -269,6 +267,7 @@
         } catch(e) { console.error(e); }
         stopMicrophone();
         resetButtons();
+        document.getElementById('statusMessage').style.color = '#2ecc71';
         document.getElementById('statusMessage').innerText = "Llamada finalizada de forma segura.";
         
         // Guardar en historial con duración
