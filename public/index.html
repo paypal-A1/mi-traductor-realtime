@@ -261,6 +261,21 @@
         stopMicrophone();
         resetButtons();
         document.getElementById('statusMessage').innerText = "Llamada finalizada de forma segura.";
+        
+        // Descarga automática de la conversación (sin confirm)
+        try {
+            const response = await fetch('/descargar-conversacion');
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `conversacion_${new Date().toISOString().slice(0,19).replace(/:/g, '-')}.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
+            console.log("✅ Conversación descargada automáticamente");
+        } catch(e) { 
+            console.error("Error al descargar conversación:", e); 
+        }
     }
 
     function resetButtons() {
