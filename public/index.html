@@ -18,6 +18,26 @@
         .history-title { font-size: 13px; font-weight: bold; color: #7f8c8d; margin-bottom: 8px; text-transform: uppercase; }
         .history-item { display: flex; justify-content: space-between; align-items: center; padding: 8px; background: white; margin-bottom: 5px; border-radius: 6px; border: 1px solid #edeec4; cursor: pointer; font-size: 14px; }
         .history-item:hover { background: #f1f2f6; }
+        .duration-popup {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #2ecc71;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 30px;
+            font-size: 16px;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+            pointer-events: none;
+        }
+        .duration-popup.show {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
@@ -43,6 +63,8 @@
         <div id="historyList"></div>
     </div>
 </div>
+
+<div id="durationPopup" class="duration-popup"></div>
 
 <script>
     let ws;
@@ -100,6 +122,8 @@
                 if (data.type === 'audio' && data.payload) {
                     console.log("📱 Navegador: Recibido paquete de audio del servidor, longitud:", data.payload.length);
                     playUlawBase64(data.payload);
+                } else if (data.type === 'call_duration' && data.duration) {
+                    mostrarDuracion(data.duration);
                 } else {
                     console.log("📩 Navegador: Mensaje recibido tipo:", data.type);
                 }
@@ -118,6 +142,15 @@
         ws.onerror = (err) => {
             console.error("❌ Navegador: Error en WebSocket:", err);
         };
+    }
+
+    function mostrarDuracion(segundos) {
+        const popup = document.getElementById('durationPopup');
+        popup.textContent = `📞 Llamada finalizada - Duración: ${segundos} segundos`;
+        popup.classList.add('show');
+        setTimeout(() => {
+            popup.classList.remove('show');
+        }, 4000);
     }
 
     async function startMicrophone() {
@@ -262,20 +295,22 @@
         resetButtons();
         document.getElementById('statusMessage').innerText = "Llamada finalizada de forma segura.";
         
-        // Descarga automática de la conversación (sin confirm)
-        try {
-            const response = await fetch('/descargar-conversacion');
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `conversacion_${new Date().toISOString().slice(0,19).replace(/:/g, '-')}.txt`;
-            a.click();
-            URL.revokeObjectURL(url);
-            console.log("✅ Conversación descargada automáticamente");
-        } catch(e) { 
-            console.error("Error al descargar conversación:", e); 
-        }
+        // Descarga automática de la conversación
+        setTimeout(async () => {
+            try {
+                const response = await fetch('/descargar-conversacion');
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `conversacion_${new Date().toISOString().slice(0,19).replace(/:/g, '-')}.txt`;
+                a.click();
+                URL.revokeObjectURL(url);
+                console.log("✅ Conversación descargada automáticamente");
+            } catch(e) { 
+                console.error("Error al descargar conversación:", e); 
+            }
+        }, 500);
     }
 
     function resetButtons() {
