@@ -319,7 +319,7 @@ wss.on('connection', (ws, req) => {
                 if (browserKeepAliveInterval) clearInterval(browserKeepAliveInterval);
                 browserKeepAliveInterval = null;
             }
-        }, 15000);
+        }, 10000);
         
         initOpenAIToEnglish();
 
