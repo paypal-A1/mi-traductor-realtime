@@ -100,6 +100,7 @@ function guardarFragmento(tipo, fragmento) {
         }
     } else if (tipo === 'tu') {
         bufferTu += fragmento;
+        // Forzar guardado si hay puntuación O si supera 150 caracteres
         if (/[.!?;:]\s*$/.test(bufferTu) || bufferTu.length > 150) {
             conversacionTemporal.push({
                 timestamp: new Date().toISOString(),
@@ -184,11 +185,13 @@ app.post('/hangup', async (req, res) => {
         if (activeCallSid) {
             await client.calls(activeCallSid).update({ status: 'completed' });
             
+            // FORZAR FINALIZAR CONVERSACIÓN ANTES DE CUALQUIER COSA
+            finalizarConversacion();
+            
             const duracion = callStartTime ? ((Date.now() - callStartTime) / 1000).toFixed(1) : 'desconocida';
             const memUsage = process.memoryUsage();
             console.log(`📊 [RAM] Llamada finalizada. Duración: ${duracion}s | RSS: ${(memUsage.rss / 1024 / 1024).toFixed(1)} MB | Heap: ${(memUsage.heapUsed / 1024 / 1024).toFixed(1)} MB`);
             
-            // Enviar a TODAS las conexiones del navegador (solo hay una en nuestro Set)
             browserConnections.forEach(client => {
                 if (client.readyState === WebSocket.OPEN) {
                     client.send(JSON.stringify({ type: 'call_duration', duration: duracion }));
