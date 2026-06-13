@@ -44,29 +44,63 @@ function encodeMuLawSample(pcm) {
     return ~(sign | (exponent << 4) | mantissa) & 0xFF;
 }
 
+// CONVERSOR 1: Teléfono/Navegador (8kHz u-law) ➡️ OpenAI (24kHz PCM16)
+// Con resampling de calidad (interpolación lineal) y corrección de múltiplo de 6
 function twilioToOpenAI(ulawBuffer) {
-    const outBuffer = Buffer.alloc(ulawBuffer.length * 6);
-    let outIdx = 0;
+    // Convertir u-law a PCM16 (8kHz)
+    const pcm8k = new Int16Array(ulawBuffer.length);
     for (let i = 0; i < ulawBuffer.length; i++) {
-        const pcmSample = ulawToPcmTable[ulawBuffer[i]];
+        pcm8k[i] = ulawToPcmTable[ulawBuffer[i]];
+    }
+    
+    // Resampling de 8kHz a 24kHz usando interpolación lineal
+    const outBuffer = Buffer.alloc(pcm8k.length * 6); // 3 veces más muestras (24kHz)
+    let outIdx = 0;
+    
+    for (let i = 0; i < pcm8k.length; i++) {
+        const currentSample = pcm8k[i];
+        const nextSample = (i + 1 < pcm8k.length) ? pcm8k[i + 1] : currentSample;
+        
+        // Generar 3 muestras por cada muestra original (interpolación lineal)
         for (let r = 0; r < 3; r++) {
-            outBuffer.writeInt16LE(pcmSample, outIdx);
+            // Factor de interpolación: 0, 0.5, 1 (para 3 muestras)
+            const factor = r / 2;
+            let interpolated = currentSample + (nextSample - currentSample) * factor;
+            interpolated = Math.max(-32768, Math.min(32767, Math.round(interpolated)));
+            outBuffer.writeInt16LE(interpolated, outIdx);
             outIdx += 2;
         }
     }
+    
     return outBuffer.toString('base64');
 }
 
+// CONVERSOR 2: OpenAI (24kHz PCM16) ➡️ Teléfono/Navegador (8kHz u-law)
+// Con resampling de calidad (promedio de 3 muestras) y corrección de múltiplo de 6
 function openAIToTwilio(pcmBase64) {
     const inBuffer = Buffer.from(pcmBase64, 'base64');
-    const outBuffer = Buffer.alloc(Math.floor(inBuffer.length / 6));
+    // Asegurar que el tamaño sea múltiplo de 2 (PCM16)
+    const usableLength = Math.floor(inBuffer.length / 2) * 2;
+    if (usableLength === 0) return Buffer.alloc(0).toString('base64');
+    
+    // Calcular cuántas muestras originales (24kHz) y cuántas muestras destino (8kHz)
+    const samples24k = usableLength / 2;
+    const samples8k = Math.floor(samples24k / 3);
+    if (samples8k === 0) return Buffer.alloc(0).toString('base64');
+    
+    const outBuffer = Buffer.alloc(samples8k);
     let outIdx = 0;
-    for (let i = 0; i < inBuffer.length; i += 6) {
-        if (i + 1 < inBuffer.length) {
-            const pcmSample = inBuffer.readInt16LE(i);
-            outBuffer[outIdx++] = encodeMuLawSample(pcmSample);
-        }
+    
+    for (let i = 0; i < samples24k - 2; i += 3) {
+        // Promediar 3 muestras consecutivas para mejor calidad
+        const sample1 = inBuffer.readInt16LE(i * 2);
+        const sample2 = inBuffer.readInt16LE((i + 1) * 2);
+        const sample3 = inBuffer.readInt16LE((i + 2) * 2);
+        let promedio = (sample1 + sample2 + sample3) / 3;
+        promedio = Math.max(-32768, Math.min(32767, Math.round(promedio)));
+        outBuffer[outIdx++] = encodeMuLawSample(promedio);
     }
+    
     return outBuffer.toString('base64');
 }
 
