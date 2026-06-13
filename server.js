@@ -14,6 +14,7 @@ const PORT = process.env.PORT || 10000;
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 let activeCallSid = null;
+let callStartTime = null; // Para el log de RAM
 
 // TABLAS DE CONVERSIÓN AUDIO
 const ulawToPcmTable = new Int16Array(256);
@@ -89,10 +90,7 @@ app.post('/make-call', async (req, res) => {
             from: process.env.TWILIO_NUMBER || '+18633445321'
         });
         activeCallSid = call.sid;
-        
-        // ACTIVAR CONVERSACIÓN PARA DESCARGA
-        conversacionTemporal = { lineas: [], activa: true };
-        
+        callStartTime = Date.now(); // Para el log de RAM
         res.status(200).json({ success: true, callSid: call.sid });
     } catch (error) {
         console.error('Error al realizar la llamada:', error);
@@ -104,15 +102,14 @@ app.post('/hangup', async (req, res) => {
     try {
         if (activeCallSid) {
             await client.calls(activeCallSid).update({ status: 'completed' });
-            activeCallSid = null;
             
-            // LOG DE MONITOREO RAM
+            // LOG DE MONITOREO RAM (ÚNICO CAMBIO)
             const memUsage = process.memoryUsage();
-            console.log(`📊 [RAM] Llamada finalizada. RSS: ${(memUsage.rss / 1024 / 1024).toFixed(1)} MB | Heap: ${(memUsage.heapUsed / 1024 / 1024).toFixed(1)} MB`);
+            const duracion = callStartTime ? ((Date.now() - callStartTime) / 1000).toFixed(1) : 'desconocida';
+            console.log(`📊 [RAM] Llamada finalizada. Duración: ${duracion}s | RSS: ${(memUsage.rss / 1024 / 1024).toFixed(1)} MB | Heap: ${(memUsage.heapUsed / 1024 / 1024).toFixed(1)} MB`);
             
-            // LIMPIAR CONVERSACIÓN (por si no se descargó)
-            conversacionTemporal = { lineas: [], activa: false };
-            
+            activeCallSid = null;
+            callStartTime = null;
             res.status(200).json({ success: true });
         } else {
             res.status(400).json({ success: false, error: "No hay llamada activa" });
@@ -122,40 +119,6 @@ app.post('/hangup', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
-
-// ==================== DESCARGA DE CONVERSACIÓN ====================
-let conversacionTemporal = { lineas: [], activa: false };
-let ultimoOriginalProveedor = '';
-
-function guardarLineaConversacion(tipo, texto) {
-    if (!conversacionTemporal.activa) return;
-    const timestamp = new Date().toISOString();
-    conversacionTemporal.lineas.push({ timestamp, tipo, texto });
-}
-
-app.post('/descargar-conversacion', (req, res) => {
-    const { decision } = req.body;
-    if (decision === 'si' && conversacionTemporal.lineas.length > 0) {
-        let contenido = '';
-        for (const linea of conversacionTemporal.lineas) {
-            const hora = new Date(linea.timestamp).toLocaleTimeString();
-            if (linea.tipo === 'tu') {
-                contenido += `[${hora}] Tú: ${linea.texto}\n`;
-            } else if (linea.tipo === 'proveedor') {
-                contenido += `[${hora}] Proveedor: ${linea.texto}\n`;
-            }
-        }
-        res.setHeader('Content-Type', 'text/plain');
-        res.setHeader('Content-Disposition', 'attachment; filename="conversacion.txt"');
-        res.send(contenido);
-    } else {
-        res.json({ success: true, message: "Conversación descartada" });
-    }
-    // Limpiar después de descargar o descartar
-    conversacionTemporal = { lineas: [], activa: false };
-    ultimoOriginalProveedor = '';
-});
-// ================================================================
 
 const server = app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
 const wss = new WebSocket.Server({ server });
@@ -195,8 +158,6 @@ function initOpenAIToEnglish() {
 
             if (response.type === 'session.input_transcript.delta') {
                 process.stdout.write(`🎙️ [Tu Micrófono dice]: ${response.delta}\n`);
-                // Guardar para descarga
-                guardarLineaConversacion('tu', response.delta);
             }
             if (response.type === 'session.output_transcript.delta') {
                 process.stdout.write(`🇺🇸 [Traducción al Inglés generada]: ${response.delta}\n`);
@@ -259,19 +220,9 @@ function initOpenAIToSpanish() {
 
             if (response.type === 'session.input_transcript.delta') {
                 process.stdout.write(`📞 [El Teléfono dice]: ${response.delta}\n`);
-                // Guardar el original en inglés temporalmente
-                ultimoOriginalProveedor = response.delta;
             }
             if (response.type === 'session.output_transcript.delta') {
                 process.stdout.write(`🇪🇸 [Traducción al Español generada]: ${response.delta}\n`);
-                // Guardar la línea completa: traducción + (original)
-                if (ultimoOriginalProveedor) {
-                    guardarLineaConversacion('proveedor', `${response.delta} (${ultimoOriginalProveedor})`);
-                    ultimoOriginalProveedor = '';
-                } else {
-                    // Si no hay original, guardar solo la traducción
-                    guardarLineaConversacion('proveedor', response.delta);
-                }
             }
 
             if (response.type === 'session.output_audio.delta' && response.delta) {
