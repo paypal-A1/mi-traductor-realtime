@@ -188,9 +188,12 @@ app.post('/hangup', async (req, res) => {
             const memUsage = process.memoryUsage();
             console.log(`📊 [RAM] Llamada finalizada. Duración: ${duracion}s | RSS: ${(memUsage.rss / 1024 / 1024).toFixed(1)} MB | Heap: ${(memUsage.heapUsed / 1024 / 1024).toFixed(1)} MB`);
             
-            if (browserWs && browserWs.readyState === WebSocket.OPEN) {
-                browserWs.send(JSON.stringify({ type: 'call_duration', duration: duracion }));
-            }
+            // Enviar a TODAS las conexiones del navegador (solo hay una en nuestro Set)
+            browserConnections.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({ type: 'call_duration', duration: duracion }));
+                }
+            });
             
             activeCallSid = null;
             callStartTime = null;
@@ -211,11 +214,24 @@ const wss = new WebSocket.Server({ server });
 let openAIWsToEnglish = null;
 let openAIWsToSpanish = null;
 let twilioWs = null;
-let browserWs = null;
 let twilioStreamSid = null;
 let twilioPacketsIn = 0;
-let browserKeepAliveInterval = null;
 let ultimoOriginalIngles = '';
+
+// Múltiples conexiones de navegador
+const browserConnections = new Set();
+
+function broadcastToBrowsers(audioData) {
+    const toRemove = [];
+    browserConnections.forEach(ws => {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'audio', payload: audioData }));
+        } else {
+            toRemove.push(ws);
+        }
+    });
+    toRemove.forEach(ws => browserConnections.delete(ws));
+}
 
 function initOpenAIToEnglish() {
     if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) return;
@@ -323,18 +339,10 @@ function initOpenAIToSpanish() {
 
             if (response.type === 'session.output_audio.delta' && response.delta) {
                 console.log(`🔊 [AUDIO -> NAVEGADOR]: Reenviando paquete de voz traducido al Español.`);
-                
-                if (!browserWs) {
-                    console.log(`❌ [ERROR] browserWs es NULL, no se puede enviar audio al navegador`);
-                } else if (browserWs.readyState !== WebSocket.OPEN) {
-                    console.log(`❌ [ERROR] browserWs estado: ${browserWs.readyState} (debe ser 1 = OPEN)`);
-                } else {
-                    console.log(`✅ browserWs OK, enviando audio al navegador...`);
-                    const convertedAudio = openAIToTwilio(response.delta);
-                    console.log(`📊 Longitud del audio convertido: ${convertedAudio.length} caracteres base64`);
-                    browserWs.send(JSON.stringify({ type: 'audio', payload: convertedAudio }));
-                    console.log(`✅ Audio enviado al navegador correctamente`);
-                }
+                const convertedAudio = openAIToTwilio(response.delta);
+                console.log(`📊 Longitud del audio convertido: ${convertedAudio.length} caracteres base64`);
+                broadcastToBrowsers(convertedAudio);
+                console.log(`✅ Audio enviado a todos los navegadores conectados`);
             }
         } catch (e) {
             console.error("Error en mensaje Canal Español:", e);
@@ -350,28 +358,21 @@ wss.on('connection', (ws, req) => {
     const pathname = urlClara.pathname;
 
     if (pathname === '/browser-stream') {
-        // No cerramos nada, solo actualizamos la referencia
-        if (browserWs) {
-            console.log('🚀 Navegador vinculado (reemplazando conexión anterior)');
-        } else {
-            console.log('🚀 Navegador vinculado (nueva conexión)');
-        }
-        browserWs = ws;
+        console.log('🚀 Navegador conectado. Total conexiones activas:', browserConnections.size + 1);
+        browserConnections.add(ws);
         
-        // Iniciar keepalive (pulso) mientras no haya llamada
-        if (browserKeepAliveInterval) clearInterval(browserKeepAliveInterval);
-        browserKeepAliveInterval = setInterval(() => {
-            if (browserWs && browserWs.readyState === WebSocket.OPEN) {
-                browserWs.send(JSON.stringify({ type: 'ping' }));
+        // Keepalive específico para esta conexión
+        const keepAliveInterval = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'ping' }));
                 console.log('💓 Keepalive enviado al navegador');
             } else {
-                if (browserKeepAliveInterval) clearInterval(browserKeepAliveInterval);
-                browserKeepAliveInterval = null;
+                clearInterval(keepAliveInterval);
             }
         }, 10000);
         
         initOpenAIToEnglish();
-    
+
         ws.on('message', (message) => {
             if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) {
                 try {
@@ -388,29 +389,23 @@ wss.on('connection', (ws, req) => {
                 }
             }
         });
-    
-        ws.on('close', () => { 
-            // Solo limpiar si es la conexión actual
-            if (browserWs === ws) {
-                browserWs = null;
-            }
-            if (browserKeepAliveInterval) {
-                clearInterval(browserKeepAliveInterval);
-                browserKeepAliveInterval = null;
-            }
-            console.log('🔌 Navegador desconectado');
+
+        ws.on('close', () => {
+            browserConnections.delete(ws);
+            clearInterval(keepAliveInterval);
+            console.log('🔌 Navegador desconectado. Conexiones restantes:', browserConnections.size);
         });
-    }
+        
+        ws.on('error', (err) => {
+            console.error('Error en WebSocket del navegador:', err.message);
+            browserConnections.delete(ws);
+            clearInterval(keepAliveInterval);
+        });
+    } 
     
     else if (pathname === '/media-stream') {
         console.log('🚀 Twilio vinculado.');
         twilioWs = ws;
-        
-        if (browserKeepAliveInterval) {
-            clearInterval(browserKeepAliveInterval);
-            browserKeepAliveInterval = null;
-            console.log('🔄 Keepalive desactivado (llamada iniciada)');
-        }
         
         initOpenAIToSpanish();
 
