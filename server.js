@@ -167,7 +167,6 @@ app.post('/make-call', async (req, res) => {
         activeCallSid = call.sid;
         callStartTime = Date.now();
         
-        // LIMPIAR TODO AL INICIAR NUEVA LLAMADA
         conversacionTemporal = [];
         bufferProveedor = '';
         bufferTu = '';
@@ -351,10 +350,14 @@ wss.on('connection', (ws, req) => {
     const pathname = urlClara.pathname;
 
     if (pathname === '/browser-stream') {
-        // Cerrar conexión anterior si existe (SOLUCIÓN PARA RECARGA DE PÁGINA)
+        // Solo cerrar si la conexión anterior sigue abierta
         if (browserWs && browserWs.readyState === WebSocket.OPEN) {
             console.log('🔌 Cerrando conexión anterior del navegador...');
-            browserWs.close();
+            try {
+                browserWs.close();
+            } catch(e) {
+                console.log('Error al cerrar conexión anterior:', e.message);
+            }
         }
         console.log('🚀 Navegador vinculado.');
         browserWs = ws;
@@ -369,7 +372,7 @@ wss.on('connection', (ws, req) => {
                 if (browserKeepAliveInterval) clearInterval(browserKeepAliveInterval);
                 browserKeepAliveInterval = null;
             }
-        }, 10000); // 10 segundos
+        }, 10000);
         
         initOpenAIToEnglish();
 
@@ -391,7 +394,10 @@ wss.on('connection', (ws, req) => {
         });
 
         ws.on('close', () => { 
-            if (browserWs === ws) browserWs = null;
+            // Solo limpiar si es la conexión actual
+            if (browserWs === ws) {
+                browserWs = null;
+            }
             if (browserKeepAliveInterval) {
                 clearInterval(browserKeepAliveInterval);
                 browserKeepAliveInterval = null;
@@ -404,7 +410,6 @@ wss.on('connection', (ws, req) => {
         console.log('🚀 Twilio vinculado.');
         twilioWs = ws;
         
-        // Matar el keepalive porque la llamada ya va a mantener la conexión viva
         if (browserKeepAliveInterval) {
             clearInterval(browserKeepAliveInterval);
             browserKeepAliveInterval = null;
