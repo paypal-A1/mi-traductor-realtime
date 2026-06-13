@@ -83,20 +83,64 @@ app.post('/twiml', (req, res) => {
 
 // ==================== DESCARGA DE CONVERSACIÓN ====================
 let conversacionTemporal = [];
+let bufferProveedor = '';  // Buffer para acumular fragmentos del proveedor
+let bufferTu = '';         // Buffer para acumular fragmentos del usuario
+let ultimoTipo = null;     // Para detectar cambio de hablante
 
-function guardarLinea(tipo, texto) {
-    conversacionTemporal.push({
-        timestamp: new Date().toISOString(),
-        tipo: tipo,
-        texto: texto
-    });
-    // Limitar a 5000 líneas por seguridad
-    if (conversacionTemporal.length > 5000) conversacionTemporal.shift();
+function flushBuffer(tipo) {
+    if (tipo === 'proveedor' && bufferProveedor.trim()) {
+        conversacionTemporal.push({
+            timestamp: new Date().toISOString(),
+            tipo: 'proveedor',
+            texto: bufferProveedor.trim()
+        });
+        bufferProveedor = '';
+    } else if (tipo === 'tu' && bufferTu.trim()) {
+        conversacionTemporal.push({
+            timestamp: new Date().toISOString(),
+            tipo: 'tu',
+            texto: bufferTu.trim()
+        });
+        bufferTu = '';
+    }
+}
+
+function guardarFragmento(tipo, fragmento) {
+    // Si cambia el tipo de hablante, flush del buffer anterior
+    if (ultimoTipo !== null && ultimoTipo !== tipo) {
+        flushBuffer(ultimoTipo);
+    }
+    ultimoTipo = tipo;
+    
+    if (tipo === 'proveedor') {
+        bufferProveedor += fragmento;
+        // Detectar final de oración: ., !, ?, o cambio de línea
+        if (/[.!?]\s*$/.test(bufferProveedor)) {
+            flushBuffer('proveedor');
+        }
+    } else if (tipo === 'tu') {
+        bufferTu += fragmento;
+        if (/[.!?]\s*$/.test(bufferTu)) {
+            flushBuffer('tu');
+        }
+    }
+    // Limitar tamaño por seguridad
+    if (bufferProveedor.length > 500) flushBuffer('proveedor');
+    if (bufferTu.length > 500) flushBuffer('tu');
+}
+
+function finalizarConversacion() {
+    flushBuffer('proveedor');
+    flushBuffer('tu');
+    bufferProveedor = '';
+    bufferTu = '';
+    ultimoTipo = null;
 }
 
 app.get('/descargar-conversacion', (req, res) => {
+    finalizarConversacion();
+    
     if (conversacionTemporal.length === 0) {
-        // Si no hay conversación, devolver un texto vacío
         res.setHeader('Content-Type', 'text/plain');
         res.setHeader('Content-Disposition', 'attachment; filename="conversacion_vacia.txt"');
         return res.send("No hay conversación registrada.");
@@ -104,7 +148,7 @@ app.get('/descargar-conversacion', (req, res) => {
     
     let contenido = '';
     for (const linea of conversacionTemporal) {
-        const hora = new Date(linea.timestamp).toLocaleTimeString();
+        const hora = new Date(linea.timestamp).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit', second:'2-digit' });
         if (linea.tipo === 'tu') {
             contenido += `[${hora}] Tú: ${linea.texto}\n`;
         } else if (linea.tipo === 'proveedor') {
@@ -116,7 +160,6 @@ app.get('/descargar-conversacion', (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="conversacion.txt"');
     res.send(contenido);
     
-    // Limpiar después de descargar
     conversacionTemporal = [];
 });
 
@@ -132,6 +175,9 @@ app.post('/make-call', async (req, res) => {
         callStartTime = Date.now();
         // Iniciar nueva conversación
         conversacionTemporal = [];
+        bufferProveedor = '';
+        bufferTu = '';
+        ultimoTipo = null;
         res.status(200).json({ success: true, callSid: call.sid });
     } catch (error) {
         console.error('Error al realizar la llamada:', error);
@@ -144,10 +190,14 @@ app.post('/hangup', async (req, res) => {
         if (activeCallSid) {
             await client.calls(activeCallSid).update({ status: 'completed' });
             
-            // LOG DE MONITOREO RAM
-            const memUsage = process.memoryUsage();
             const duracion = callStartTime ? ((Date.now() - callStartTime) / 1000).toFixed(1) : 'desconocida';
+            const memUsage = process.memoryUsage();
             console.log(`📊 [RAM] Llamada finalizada. Duración: ${duracion}s | RSS: ${(memUsage.rss / 1024 / 1024).toFixed(1)} MB | Heap: ${(memUsage.heapUsed / 1024 / 1024).toFixed(1)} MB`);
+            
+            // Enviar duración al navegador antes de limpiar
+            if (browserWs && browserWs.readyState === WebSocket.OPEN) {
+                browserWs.send(JSON.stringify({ type: 'call_duration', duration: duracion }));
+            }
             
             activeCallSid = null;
             callStartTime = null;
@@ -172,7 +222,7 @@ let browserWs = null;
 let twilioStreamSid = null;
 let twilioPacketsIn = 0;
 let browserKeepAliveInterval = null;
-let ultimoOriginalIngles = ''; // Para guardar el original del teléfono
+let ultimoOriginalIngles = '';
 
 function initOpenAIToEnglish() {
     if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) return;
@@ -200,8 +250,9 @@ function initOpenAIToEnglish() {
             if (response.type === 'error') console.error('❌ [ERROR OPENAI EN]:', response.error);
 
             if (response.type === 'session.input_transcript.delta') {
-                process.stdout.write(`🎙️ [Tu Micrófono dice]: ${response.delta}\n`);
-                guardarLinea('tu', response.delta);
+                const texto = response.delta;
+                process.stdout.write(`🎙️ [Tu Micrófono dice]: ${texto}\n`);
+                guardarFragmento('tu', texto);
             }
             if (response.type === 'session.output_transcript.delta') {
                 process.stdout.write(`🇺🇸 [Traducción al Inglés generada]: ${response.delta}\n`);
@@ -267,13 +318,14 @@ function initOpenAIToSpanish() {
                 ultimoOriginalIngles = response.delta;
             }
             if (response.type === 'session.output_transcript.delta') {
-                process.stdout.write(`🇪🇸 [Traducción al Español generada]: ${response.delta}\n`);
+                const texto = response.delta;
+                process.stdout.write(`🇪🇸 [Traducción al Español generada]: ${texto}\n`);
                 // Guardar línea bilingüe: traducción al español (original en inglés)
                 if (ultimoOriginalIngles) {
-                    guardarLinea('proveedor', `${response.delta} (${ultimoOriginalIngles})`);
+                    guardarFragmento('proveedor', `${texto} (${ultimoOriginalIngles})`);
                     ultimoOriginalIngles = '';
                 } else {
-                    guardarLinea('proveedor', response.delta);
+                    guardarFragmento('proveedor', texto);
                 }
             }
 
@@ -319,7 +371,7 @@ wss.on('connection', (ws, req) => {
                 if (browserKeepAliveInterval) clearInterval(browserKeepAliveInterval);
                 browserKeepAliveInterval = null;
             }
-        }, 10000);
+        }, 10000); // Cada 10 segundos
         
         initOpenAIToEnglish();
 
