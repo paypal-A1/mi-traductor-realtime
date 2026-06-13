@@ -67,6 +67,7 @@
     let ultimaDuracion = null;
     let callStartTimer = null;
     let timerInterval = null;
+    let micActivationPending = false;
 
     function press(num) { document.getElementById('phoneNumber').value += num; }
     
@@ -96,9 +97,7 @@
 
     function saveHistory(num, duration) {
         let history = JSON.parse(localStorage.getItem('phoneHistory')) || [];
-        // Guardar cada llamada como un registro independiente (sin eliminar duplicados)
         history.unshift({ number: num, duration: duration, timestamp: Date.now() });
-        // Mantener solo las últimas 50 llamadas
         if (history.length > 50) history.pop();
         localStorage.setItem('phoneHistory', JSON.stringify(history));
         loadHistory();
@@ -114,7 +113,7 @@
             document.getElementById('statusMessage').innerText = "✅ Sistema Listo y Conectado";
         };
         
-        ws.onmessage = (event) => {
+        ws.onmessage = async (event) => {
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === 'audio' && data.payload) {
@@ -122,6 +121,22 @@
                     playUlawBase64(data.payload);
                 } else if (data.type === 'call_duration' && data.duration) {
                     ultimaDuracion = data.duration;
+                    console.log("📊 Duración recibida del servidor:", ultimaDuracion);
+                } else if (data.type === 'twilio_ready') {
+                    console.log("📞 Twilio listo, activando micrófono...");
+                    document.getElementById('statusMessage').innerText = "Llamada en curso...";
+                    await startMicrophone();
+                    // Iniciar contador de tiempo
+                    callStartTimer = Date.now();
+                    const timerDiv = document.getElementById('callTimer');
+                    timerDiv.style.display = 'block';
+                    if (timerInterval) clearInterval(timerInterval);
+                    timerInterval = setInterval(() => {
+                        const elapsed = Math.floor((Date.now() - callStartTimer) / 1000);
+                        const mins = Math.floor(elapsed / 60);
+                        const secs = elapsed % 60;
+                        timerDiv.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                    }, 1000);
                 } else {
                     console.log("📩 Navegador: Mensaje recibido tipo:", data.type);
                 }
@@ -252,8 +267,10 @@
         document.getElementById('hangupBtn').style.display = 'block';
         document.getElementById('statusMessage').innerText = "Marcando...";
         
-        await startMicrophone();
-
+        saveHistory(number);
+        
+        // NO activar micrófono aquí - se activará cuando llegue 'twilio_ready'
+        
         try {
             const response = await fetch('/make-call', {
                 method: 'POST',
@@ -263,20 +280,7 @@
             
             const result = await response.json();
             if(result.success) {
-                document.getElementById('statusMessage').style.color = '#2ecc71';
-                document.getElementById('statusMessage').innerText = "Llamada en curso...";
-                
-                // INICIAR CONTADOR DE TIEMPO
-                callStartTimer = Date.now();
-                const timerDiv = document.getElementById('callTimer');
-                timerDiv.style.display = 'block';
-                if (timerInterval) clearInterval(timerInterval);
-                timerInterval = setInterval(() => {
-                    const elapsed = Math.floor((Date.now() - callStartTimer) / 1000);
-                    const mins = Math.floor(elapsed / 60);
-                    const secs = elapsed % 60;
-                    timerDiv.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-                }, 1000);
+                document.getElementById('statusMessage').innerText = "Esperando conexión...";
             } else {
                 alert("Error de Twilio: " + result.error);
                 resetButtons();
@@ -291,7 +295,6 @@
         const number = document.getElementById('phoneNumber').value;
         document.getElementById('statusMessage').innerText = "Cortando conexión...";
         
-        // DETENER CONTADOR
         if (timerInterval) {
             clearInterval(timerInterval);
             timerInterval = null;
@@ -309,41 +312,5 @@
         document.getElementById('statusMessage').style.color = '#2ecc71';
         document.getElementById('statusMessage').innerText = "Llamada finalizada de forma segura.";
         
-        // Guardar en historial con duración
-        if (ultimaDuracion) {
-            saveHistory(number, ultimaDuracion);
-            ultimaDuracion = null;
-        } else {
-            saveHistory(number, null);
-        }
-        
-        // Descarga automática de la conversación
-        setTimeout(async () => {
-            try {
-                const response = await fetch('/descargar-conversacion');
-                const blob = await response.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `conversacion_${new Date().toISOString().slice(0,19).replace(/:/g, '-')}.txt`;
-                a.click();
-                URL.revokeObjectURL(url);
-                console.log("✅ Conversación descargada automáticamente");
-            } catch(e) { 
-                console.error("Error al descargar conversación:", e); 
-            }
-        }, 500);
-    }
-
-    function resetButtons() {
-        document.getElementById('callBtn').style.display = 'block';
-        document.getElementById('hangupBtn').style.display = 'none';
-    }
-
-    window.onload = () => {
-        connectWebSocket();
-        loadHistory();
-    };
-</script>
-</body>
-</html>
+        setTimeout(() => {
+            if (ultimaDurac
