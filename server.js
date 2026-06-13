@@ -270,6 +270,8 @@ function initOpenAIToEnglish() {
         }
     });
 
+    let ultimoEspanol = ''; // Variable local para guardar lo que dices en español
+
     openAIWsToEnglish.on('open', () => {
         console.log('✅ OpenAI [Canal Inglés] conectado con éxito.');
         openAIWsToEnglish.send(JSON.stringify({
@@ -283,13 +285,25 @@ function initOpenAIToEnglish() {
             const response = JSON.parse(message);
             if (response.type === 'error') console.error('❌ [ERROR OPENAI EN]:', response.error);
 
+            // Capturamos lo que dices en español (original)
             if (response.type === 'session.input_transcript.delta') {
-                const texto = response.delta;
-                process.stdout.write(`🎙️ [Tu Micrófono dice]: ${texto}\n`);
-                guardarFragmento('tu', texto);
+                ultimoEspanol = response.delta;
+                process.stdout.write(`🎙️ [Tu Micrófono dice]: ${ultimoEspanol}\n`);
             }
+            
+            // Cuando llega la traducción al inglés, guardamos el español original
             if (response.type === 'session.output_transcript.delta') {
-                process.stdout.write(`🇺🇸 [Traducción al Inglés generada]: ${response.delta}\n`);
+                const traduccionIngles = response.delta;
+                process.stdout.write(`🇺🇸 [Traducción al Inglés generada]: ${traduccionIngles}\n`);
+                
+                if (ultimoEspanol) {
+                    // Guardas lo que dijiste en español (original)
+                    guardarFragmento('tu', ultimoEspanol);
+                    ultimoEspanol = '';
+                } else {
+                    // Fallback: si no hay original, guardas la traducción
+                    guardarFragmento('tu', traduccionIngles);
+                }
             }
 
             if (response.type === 'session.output_audio.delta' && response.delta) {
@@ -314,7 +328,6 @@ function initOpenAIToEnglish() {
                 }
             }
             
-            // CAMBIO 1: session.closed
             if (response.type === 'session.closed') {
                 console.log('✅ Sesión OpenAI [Inglés] cerrada limpiamente');
                 if (openAIWsToEnglish) {
