@@ -184,27 +184,39 @@ app.post('/make-call', async (req, res) => {
 app.post('/hangup', async (req, res) => {
     try {
         if (activeCallSid) {
+            // 1. Cerrar llamada en Twilio
             await client.calls(activeCallSid).update({ status: 'completed' });
             
+            // 2. Finalizar conversación para guardar lo que falta
             finalizarConversacion();
             
+            // 3. CERRAR SESIONES DE OPENAI INMEDIATAMENTE (para que no sigan enviando audio)
+            if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) {
+                openAIWsToEnglish.send(JSON.stringify({ type: "session.close" }));
+                setTimeout(() => {
+                    if (openAIWsToEnglish) openAIWsToEnglish.close();
+                    openAIWsToEnglish = null;
+                }, 100);
+            }
+            if (openAIWsToSpanish && openAIWsToSpanish.readyState === WebSocket.OPEN) {
+                openAIWsToSpanish.send(JSON.stringify({ type: "session.close" }));
+                setTimeout(() => {
+                    if (openAIWsToSpanish) openAIWsToSpanish.close();
+                    openAIWsToSpanish = null;
+                }, 100);
+            }
+            
+            // 4. Calcular duración y RAM
             const duracion = callStartTime ? ((Date.now() - callStartTime) / 1000).toFixed(1) : 'desconocida';
             const memUsage = process.memoryUsage();
             console.log(`📊 [RAM] Llamada finalizada. Duración: ${duracion}s | RSS: ${(memUsage.rss / 1024 / 1024).toFixed(1)} MB | Heap: ${(memUsage.heapUsed / 1024 / 1024).toFixed(1)} MB`);
             
+            // 5. Notificar al navegador la duración
             browserConnections.forEach(client => {
                 if (client.readyState === WebSocket.OPEN) {
                     client.send(JSON.stringify({ type: 'call_duration', duration: duracion }));
                 }
             });
-            
-            // Enviar session.close a OpenAI antes de cerrar
-            if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) {
-                openAIWsToEnglish.send(JSON.stringify({ type: "session.close" }));
-            }
-            if (openAIWsToSpanish && openAIWsToSpanish.readyState === WebSocket.OPEN) {
-                openAIWsToSpanish.send(JSON.stringify({ type: "session.close" }));
-            }
             
             activeCallSid = null;
             callStartTime = null;
