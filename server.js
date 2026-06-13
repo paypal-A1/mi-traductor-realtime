@@ -45,7 +45,6 @@ function encodeMuLawSample(pcm) {
 }
 
 // CONVERSOR 1: Teléfono/Navegador (8kHz u-law) ➡️ OpenAI (24kHz PCM16)
-// Versión ORIGINAL (funcionaba bien)
 function twilioToOpenAI(ulawBuffer) {
     const outBuffer = Buffer.alloc(ulawBuffer.length * 6);
     let outIdx = 0;
@@ -60,7 +59,6 @@ function twilioToOpenAI(ulawBuffer) {
 }
 
 // CONVERSOR 2: OpenAI (24kHz PCM16) ➡️ Teléfono/Navegador (8kHz u-law)
-// Versión ORIGINAL (funcionaba bien)
 function openAIToTwilio(pcmBase64) {
     const inBuffer = Buffer.from(pcmBase64, 'base64');
     const outBuffer = Buffer.alloc(Math.floor(inBuffer.length / 6));
@@ -73,6 +71,7 @@ function openAIToTwilio(pcmBase64) {
     }
     return outBuffer.toString('base64');
 }
+
 app.post('/twiml', (req, res) => {
     res.type('text/xml');
     res.send(`
@@ -103,7 +102,6 @@ function guardarFragmento(tipo, fragmento) {
         }
     } else if (tipo === 'tu') {
         bufferTu += fragmento;
-        // Forzar guardado si hay puntuación O si supera 150 caracteres
         if (/[.!?;:]\s*$/.test(bufferTu) || bufferTu.length > 150) {
             conversacionTemporal.push({
                 timestamp: new Date().toISOString(),
@@ -188,7 +186,6 @@ app.post('/hangup', async (req, res) => {
         if (activeCallSid) {
             await client.calls(activeCallSid).update({ status: 'completed' });
             
-            // FORZAR FINALIZAR CONVERSACIÓN ANTES DE CUALQUIER COSA
             finalizarConversacion();
             
             const duracion = callStartTime ? ((Date.now() - callStartTime) / 1000).toFixed(1) : 'desconocida';
@@ -200,6 +197,14 @@ app.post('/hangup', async (req, res) => {
                     client.send(JSON.stringify({ type: 'call_duration', duration: duracion }));
                 }
             });
+            
+            // Enviar session.close a OpenAI antes de cerrar
+            if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) {
+                openAIWsToEnglish.send(JSON.stringify({ type: "session.close" }));
+            }
+            if (openAIWsToSpanish && openAIWsToSpanish.readyState === WebSocket.OPEN) {
+                openAIWsToSpanish.send(JSON.stringify({ type: "session.close" }));
+            }
             
             activeCallSid = null;
             callStartTime = null;
@@ -224,7 +229,6 @@ let twilioStreamSid = null;
 let twilioPacketsIn = 0;
 let ultimoOriginalIngles = '';
 
-// Múltiples conexiones de navegador
 const browserConnections = new Set();
 
 function broadcastToBrowsers(audioData) {
@@ -294,6 +298,15 @@ function initOpenAIToEnglish() {
                     console.log(`✅ Audio enviado al teléfono correctamente`);
                 }
             }
+            
+            // CAMBIO 1: session.closed
+            if (response.type === 'session.closed') {
+                console.log('✅ Sesión OpenAI [Inglés] cerrada limpiamente');
+                if (openAIWsToEnglish) {
+                    openAIWsToEnglish.close();
+                    openAIWsToEnglish = null;
+                }
+            }
         } catch (e) {
             console.error("Error en mensaje Canal Inglés:", e);
         }
@@ -350,6 +363,15 @@ function initOpenAIToSpanish() {
                 broadcastToBrowsers(convertedAudio);
                 console.log(`✅ Audio enviado a todos los navegadores conectados`);
             }
+            
+            // CAMBIO 1: session.closed
+            if (response.type === 'session.closed') {
+                console.log('✅ Sesión OpenAI [Español] cerrada limpiamente');
+                if (openAIWsToSpanish) {
+                    openAIWsToSpanish.close();
+                    openAIWsToSpanish = null;
+                }
+            }
         } catch (e) {
             console.error("Error en mensaje Canal Español:", e);
         }
@@ -367,7 +389,6 @@ wss.on('connection', (ws, req) => {
         console.log('🚀 Navegador conectado. Total conexiones activas:', browserConnections.size + 1);
         browserConnections.add(ws);
         
-        // Keepalive específico para esta conexión
         const keepAliveInterval = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'ping' }));
@@ -422,6 +443,14 @@ wss.on('connection', (ws, req) => {
                 if (data.event === 'start') {
                     twilioStreamSid = data.start.streamSid;
                     console.log(`📞 Enlace Twilio fijado: ${twilioStreamSid}`);
+                    
+                    // CAMBIO 2: Notificar al navegador que puede activar el micrófono
+                    browserConnections.forEach(client => {
+                        if (client.readyState === WebSocket.OPEN) {
+                            client.send(JSON.stringify({ type: 'twilio_ready' }));
+                            console.log('📢 Notificado al navegador: Twilio listo');
+                        }
+                    });
                 }
 
                 if (data.event === 'media') {
