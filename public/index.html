@@ -313,4 +313,40 @@
         document.getElementById('statusMessage').innerText = "Llamada finalizada de forma segura.";
         
         setTimeout(() => {
-            if (ultimaDurac
+            if (ultimaDuracion) {
+                saveHistory(number, ultimaDuracion);
+                ultimaDuracion = null;
+            } else {
+                saveHistory(number, null);
+            }
+        }, 500);
+        
+        setTimeout(async () => {
+            try {
+                const response = await fetch('/descargar-conversacion');
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `conversacion_${new Date().toISOString().slice(0,19).replace(/:/g, '-')}.txt`;
+                a.click();
+                URL.revokeObjectURL(url);
+                console.log("✅ Conversación descargada automáticamente");
+            } catch(e) { 
+                console.error("Error al descargar conversación:", e); 
+            }
+        }, 500);
+    }
+
+    function resetButtons() {
+        document.getElementById('callBtn').style.display = 'block';
+        document.getElementById('hangupBtn').style.display = 'none';
+    }
+
+    window.onload = () => {
+        connectWebSocket();
+        loadHistory();
+    };
+</script>
+</body>
+</html>
