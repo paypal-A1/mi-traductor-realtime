@@ -83,19 +83,44 @@ app.post('/twiml', (req, res) => {
 
 // ==================== DESCARGA DE CONVERSACIÓN ====================
 let conversacionTemporal = [];
-let bufferProveedor = '';  // Buffer para acumular fragmentos del proveedor
-let bufferTu = '';         // Buffer para acumular fragmentos del usuario
-let ultimoTipo = null;     // Para detectar cambio de hablante
+let bufferProveedor = '';
+let bufferTu = '';
+let ultimoTipo = null;
 
-function flushBuffer(tipo) {
-    if (tipo === 'proveedor' && bufferProveedor.trim()) {
+function guardarFragmento(tipo, fragmento) {
+    if (tipo === 'proveedor') {
+        bufferProveedor += fragmento;
+        if (/[.!?;:]\s*$/.test(bufferProveedor) || bufferProveedor.length > 150) {
+            conversacionTemporal.push({
+                timestamp: new Date().toISOString(),
+                tipo: 'proveedor',
+                texto: bufferProveedor.trim()
+            });
+            bufferProveedor = '';
+        }
+    } else if (tipo === 'tu') {
+        bufferTu += fragmento;
+        if (/[.!?;:]\s*$/.test(bufferTu) || bufferTu.length > 150) {
+            conversacionTemporal.push({
+                timestamp: new Date().toISOString(),
+                tipo: 'tu',
+                texto: bufferTu.trim()
+            });
+            bufferTu = '';
+        }
+    }
+}
+
+function finalizarConversacion() {
+    if (bufferProveedor.trim()) {
         conversacionTemporal.push({
             timestamp: new Date().toISOString(),
             tipo: 'proveedor',
             texto: bufferProveedor.trim()
         });
         bufferProveedor = '';
-    } else if (tipo === 'tu' && bufferTu.trim()) {
+    }
+    if (bufferTu.trim()) {
         conversacionTemporal.push({
             timestamp: new Date().toISOString(),
             tipo: 'tu',
@@ -103,38 +128,6 @@ function flushBuffer(tipo) {
         });
         bufferTu = '';
     }
-}
-
-function guardarFragmento(tipo, fragmento) {
-    // Si cambia el tipo de hablante, flush del buffer anterior
-    if (ultimoTipo !== null && ultimoTipo !== tipo) {
-        flushBuffer(ultimoTipo);
-    }
-    ultimoTipo = tipo;
-    
-    if (tipo === 'proveedor') {
-        bufferProveedor += fragmento;
-        // Detectar final de oración: ., !, ?, o cambio de línea
-        if (/[.!?]\s*$/.test(bufferProveedor)) {
-            flushBuffer('proveedor');
-        }
-    } else if (tipo === 'tu') {
-        bufferTu += fragmento;
-        if (/[.!?]\s*$/.test(bufferTu)) {
-            flushBuffer('tu');
-        }
-    }
-    // Limitar tamaño por seguridad
-    if (bufferProveedor.length > 500) flushBuffer('proveedor');
-    if (bufferTu.length > 500) flushBuffer('tu');
-}
-
-function finalizarConversacion() {
-    flushBuffer('proveedor');
-    flushBuffer('tu');
-    bufferProveedor = '';
-    bufferTu = '';
-    ultimoTipo = null;
 }
 
 app.get('/descargar-conversacion', (req, res) => {
@@ -173,11 +166,13 @@ app.post('/make-call', async (req, res) => {
         });
         activeCallSid = call.sid;
         callStartTime = Date.now();
-        // Iniciar nueva conversación
+        
+        // LIMPIAR TODO AL INICIAR NUEVA LLAMADA
         conversacionTemporal = [];
         bufferProveedor = '';
         bufferTu = '';
         ultimoTipo = null;
+        
         res.status(200).json({ success: true, callSid: call.sid });
     } catch (error) {
         console.error('Error al realizar la llamada:', error);
@@ -194,7 +189,6 @@ app.post('/hangup', async (req, res) => {
             const memUsage = process.memoryUsage();
             console.log(`📊 [RAM] Llamada finalizada. Duración: ${duracion}s | RSS: ${(memUsage.rss / 1024 / 1024).toFixed(1)} MB | Heap: ${(memUsage.heapUsed / 1024 / 1024).toFixed(1)} MB`);
             
-            // Enviar duración al navegador antes de limpiar
             if (browserWs && browserWs.readyState === WebSocket.OPEN) {
                 browserWs.send(JSON.stringify({ type: 'call_duration', duration: duracion }));
             }
@@ -320,7 +314,6 @@ function initOpenAIToSpanish() {
             if (response.type === 'session.output_transcript.delta') {
                 const texto = response.delta;
                 process.stdout.write(`🇪🇸 [Traducción al Español generada]: ${texto}\n`);
-                // Guardar línea bilingüe: traducción al español (original en inglés)
                 if (ultimoOriginalIngles) {
                     guardarFragmento('proveedor', `${texto} (${ultimoOriginalIngles})`);
                     ultimoOriginalIngles = '';
@@ -358,6 +351,11 @@ wss.on('connection', (ws, req) => {
     const pathname = urlClara.pathname;
 
     if (pathname === '/browser-stream') {
+        // Cerrar conexión anterior si existe (SOLUCIÓN PARA RECARGA DE PÁGINA)
+        if (browserWs && browserWs.readyState === WebSocket.OPEN) {
+            console.log('🔌 Cerrando conexión anterior del navegador...');
+            browserWs.close();
+        }
         console.log('🚀 Navegador vinculado.');
         browserWs = ws;
         
@@ -371,7 +369,7 @@ wss.on('connection', (ws, req) => {
                 if (browserKeepAliveInterval) clearInterval(browserKeepAliveInterval);
                 browserKeepAliveInterval = null;
             }
-        }, 5000); // Cada 10 segundos
+        }, 10000); // 10 segundos
         
         initOpenAIToEnglish();
 
@@ -393,7 +391,7 @@ wss.on('connection', (ws, req) => {
         });
 
         ws.on('close', () => { 
-            browserWs = null;
+            if (browserWs === ws) browserWs = null;
             if (browserKeepAliveInterval) {
                 clearInterval(browserKeepAliveInterval);
                 browserKeepAliveInterval = null;
