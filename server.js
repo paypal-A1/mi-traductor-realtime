@@ -350,16 +350,12 @@ wss.on('connection', (ws, req) => {
     const pathname = urlClara.pathname;
 
     if (pathname === '/browser-stream') {
-        // Solo cerrar si la conexión anterior sigue abierta
-        if (browserWs && browserWs.readyState === WebSocket.OPEN) {
-            console.log('🔌 Cerrando conexión anterior del navegador...');
-            try {
-                browserWs.close();
-            } catch(e) {
-                console.log('Error al cerrar conexión anterior:', e.message);
-            }
+        // No cerramos nada, solo actualizamos la referencia
+        if (browserWs) {
+            console.log('🚀 Navegador vinculado (reemplazando conexión anterior)');
+        } else {
+            console.log('🚀 Navegador vinculado (nueva conexión)');
         }
-        console.log('🚀 Navegador vinculado.');
         browserWs = ws;
         
         // Iniciar keepalive (pulso) mientras no haya llamada
@@ -375,7 +371,7 @@ wss.on('connection', (ws, req) => {
         }, 10000);
         
         initOpenAIToEnglish();
-
+    
         ws.on('message', (message) => {
             if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) {
                 try {
@@ -392,7 +388,7 @@ wss.on('connection', (ws, req) => {
                 }
             }
         });
-
+    
         ws.on('close', () => { 
             // Solo limpiar si es la conexión actual
             if (browserWs === ws) {
@@ -404,7 +400,7 @@ wss.on('connection', (ws, req) => {
             }
             console.log('🔌 Navegador desconectado');
         });
-    } 
+    }
     
     else if (pathname === '/media-stream') {
         console.log('🚀 Twilio vinculado.');
