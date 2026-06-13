@@ -14,7 +14,7 @@ const PORT = process.env.PORT || 10000;
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 let activeCallSid = null;
-let callStartTime = null; // Para el log de RAM
+let callStartTime = null;
 
 // TABLAS DE CONVERSIÓN AUDIO
 const ulawToPcmTable = new Int16Array(256);
@@ -81,6 +81,45 @@ app.post('/twiml', (req, res) => {
     `);
 });
 
+// ==================== DESCARGA DE CONVERSACIÓN ====================
+let conversacionTemporal = [];
+
+function guardarLinea(tipo, texto) {
+    conversacionTemporal.push({
+        timestamp: new Date().toISOString(),
+        tipo: tipo,
+        texto: texto
+    });
+    // Limitar a 5000 líneas por seguridad
+    if (conversacionTemporal.length > 5000) conversacionTemporal.shift();
+}
+
+app.get('/descargar-conversacion', (req, res) => {
+    if (conversacionTemporal.length === 0) {
+        // Si no hay conversación, devolver un texto vacío
+        res.setHeader('Content-Type', 'text/plain');
+        res.setHeader('Content-Disposition', 'attachment; filename="conversacion_vacia.txt"');
+        return res.send("No hay conversación registrada.");
+    }
+    
+    let contenido = '';
+    for (const linea of conversacionTemporal) {
+        const hora = new Date(linea.timestamp).toLocaleTimeString();
+        if (linea.tipo === 'tu') {
+            contenido += `[${hora}] Tú: ${linea.texto}\n`;
+        } else if (linea.tipo === 'proveedor') {
+            contenido += `[${hora}] Proveedor: ${linea.texto}\n`;
+        }
+    }
+    
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', 'attachment; filename="conversacion.txt"');
+    res.send(contenido);
+    
+    // Limpiar después de descargar
+    conversacionTemporal = [];
+});
+
 app.post('/make-call', async (req, res) => {
     const { toPhoneNumber } = req.body;
     try {
@@ -90,7 +129,9 @@ app.post('/make-call', async (req, res) => {
             from: process.env.TWILIO_NUMBER || '+18633445321'
         });
         activeCallSid = call.sid;
-        callStartTime = Date.now(); // Para el log de RAM
+        callStartTime = Date.now();
+        // Iniciar nueva conversación
+        conversacionTemporal = [];
         res.status(200).json({ success: true, callSid: call.sid });
     } catch (error) {
         console.error('Error al realizar la llamada:', error);
@@ -103,7 +144,7 @@ app.post('/hangup', async (req, res) => {
         if (activeCallSid) {
             await client.calls(activeCallSid).update({ status: 'completed' });
             
-            // LOG DE MONITOREO RAM (ÚNICO CAMBIO)
+            // LOG DE MONITOREO RAM
             const memUsage = process.memoryUsage();
             const duracion = callStartTime ? ((Date.now() - callStartTime) / 1000).toFixed(1) : 'desconocida';
             console.log(`📊 [RAM] Llamada finalizada. Duración: ${duracion}s | RSS: ${(memUsage.rss / 1024 / 1024).toFixed(1)} MB | Heap: ${(memUsage.heapUsed / 1024 / 1024).toFixed(1)} MB`);
@@ -119,6 +160,7 @@ app.post('/hangup', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+// ================================================================
 
 const server = app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
 const wss = new WebSocket.Server({ server });
@@ -130,6 +172,7 @@ let browserWs = null;
 let twilioStreamSid = null;
 let twilioPacketsIn = 0;
 let browserKeepAliveInterval = null;
+let ultimoOriginalIngles = ''; // Para guardar el original del teléfono
 
 function initOpenAIToEnglish() {
     if (openAIWsToEnglish && openAIWsToEnglish.readyState === WebSocket.OPEN) return;
@@ -158,6 +201,7 @@ function initOpenAIToEnglish() {
 
             if (response.type === 'session.input_transcript.delta') {
                 process.stdout.write(`🎙️ [Tu Micrófono dice]: ${response.delta}\n`);
+                guardarLinea('tu', response.delta);
             }
             if (response.type === 'session.output_transcript.delta') {
                 process.stdout.write(`🇺🇸 [Traducción al Inglés generada]: ${response.delta}\n`);
@@ -220,9 +264,17 @@ function initOpenAIToSpanish() {
 
             if (response.type === 'session.input_transcript.delta') {
                 process.stdout.write(`📞 [El Teléfono dice]: ${response.delta}\n`);
+                ultimoOriginalIngles = response.delta;
             }
             if (response.type === 'session.output_transcript.delta') {
                 process.stdout.write(`🇪🇸 [Traducción al Español generada]: ${response.delta}\n`);
+                // Guardar línea bilingüe: traducción al español (original en inglés)
+                if (ultimoOriginalIngles) {
+                    guardarLinea('proveedor', `${response.delta} (${ultimoOriginalIngles})`);
+                    ultimoOriginalIngles = '';
+                } else {
+                    guardarLinea('proveedor', response.delta);
+                }
             }
 
             if (response.type === 'session.output_audio.delta' && response.delta) {
