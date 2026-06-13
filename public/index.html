@@ -18,6 +18,19 @@
         .history-title { font-size: 13px; font-weight: bold; color: #7f8c8d; margin-bottom: 8px; text-transform: uppercase; }
         .history-item { display: flex; justify-content: space-between; align-items: center; padding: 8px; background: white; margin-bottom: 5px; border-radius: 6px; border: 1px solid #edeec4; cursor: pointer; font-size: 14px; }
         .history-item:hover { background: #f1f2f6; }
+        .timer {
+            font-size: 28px;
+            font-weight: bold;
+            text-align: center;
+            margin: 10px 0;
+            padding: 8px;
+            background: #2ecc71;
+            color: white;
+            border-radius: 30px;
+            display: none;
+            font-family: monospace;
+            letter-spacing: 2px;
+        }
     </style>
 </head>
 <body>
@@ -37,6 +50,7 @@
     </div>
 
     <div id="statusMessage" class="status">Conectando canales...</div>
+    <div id="callTimer" class="timer">00:00</div>
 
     <div class="history-section">
         <div class="history-title">🕒 Recientes (Toca para cargar)</div>
@@ -51,6 +65,8 @@
     let source;
     let globalStream;
     let ultimaDuracion = null;
+    let callStartTimer = null;
+    let timerInterval = null;
 
     function press(num) { document.getElementById('phoneNumber').value += num; }
     
@@ -249,6 +265,18 @@
             if(result.success) {
                 document.getElementById('statusMessage').style.color = '#2ecc71';
                 document.getElementById('statusMessage').innerText = "Llamada en curso...";
+                
+                // INICIAR CONTADOR DE TIEMPO
+                callStartTimer = Date.now();
+                const timerDiv = document.getElementById('callTimer');
+                timerDiv.style.display = 'block';
+                if (timerInterval) clearInterval(timerInterval);
+                timerInterval = setInterval(() => {
+                    const elapsed = Math.floor((Date.now() - callStartTimer) / 1000);
+                    const mins = Math.floor(elapsed / 60);
+                    const secs = elapsed % 60;
+                    timerDiv.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                }, 1000);
             } else {
                 alert("Error de Twilio: " + result.error);
                 resetButtons();
@@ -262,6 +290,17 @@
     async function endCall() {
         const number = document.getElementById('phoneNumber').value;
         document.getElementById('statusMessage').innerText = "Cortando conexión...";
+        
+        // DETENER CONTADOR
+        if (timerInterval) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+        }
+        const timerDiv = document.getElementById('callTimer');
+        timerDiv.style.display = 'none';
+        timerDiv.textContent = '00:00';
+        callStartTimer = null;
+        
         try {
             await fetch('/hangup', { method: 'POST' });
         } catch(e) { console.error(e); }
