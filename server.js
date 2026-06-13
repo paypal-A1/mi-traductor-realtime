@@ -371,7 +371,7 @@ wss.on('connection', (ws, req) => {
                 if (browserKeepAliveInterval) clearInterval(browserKeepAliveInterval);
                 browserKeepAliveInterval = null;
             }
-        }, 10000); // Cada 10 segundos
+        }, 5000); // Cada 10 segundos
         
         initOpenAIToEnglish();
 
