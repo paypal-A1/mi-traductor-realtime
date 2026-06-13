@@ -288,20 +288,22 @@ function initOpenAIToEnglish() {
             // Capturamos lo que dices en español (original)
             if (response.type === 'session.input_transcript.delta') {
                 ultimoEspanol = response.delta;
+                console.log(`🎙️ [ESPAÑOL ORIGINAL CAPTURADO]: "${ultimoEspanol}"`);
                 process.stdout.write(`🎙️ [Tu Micrófono dice]: ${ultimoEspanol}\n`);
             }
             
             // Cuando llega la traducción al inglés, guardamos el español original
             if (response.type === 'session.output_transcript.delta') {
                 const traduccionIngles = response.delta;
+                console.log(`🇺🇸 [TRADUCCIÓN INGLÉS RECIBIDA]: "${traduccionIngles}"`);
                 process.stdout.write(`🇺🇸 [Traducción al Inglés generada]: ${traduccionIngles}\n`);
                 
                 if (ultimoEspanol) {
-                    // Guardas lo que dijiste en español (original)
+                    console.log(`✅ [GUARDANDO] Original español: "${ultimoEspanol}"`);
                     guardarFragmento('tu', ultimoEspanol);
                     ultimoEspanol = '';
                 } else {
-                    // Fallback: si no hay original, guardas la traducción
+                    console.log(`⚠️ [FALLBACK] No hay español original, guardando traducción: "${traduccionIngles}"`);
                     guardarFragmento('tu', traduccionIngles);
                 }
             }
