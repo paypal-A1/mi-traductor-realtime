@@ -254,6 +254,32 @@
     }
 
     async function endCall() {
+        // Preguntar si desea descargar la conversación
+        const descargar = confirm("¿Deseas descargar la conversación?");
+        
+        try {
+            const response = await fetch('/descargar-conversacion', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ decision: descargar ? 'si' : 'no' })
+            });
+            
+            if (descargar) {
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `conversacion_${new Date().toISOString().slice(0,19).replace(/:/g, '-')}.txt`;
+                a.click();
+                URL.revokeObjectURL(url);
+                console.log("✅ Conversación descargada");
+            } else {
+                console.log("📝 Conversación descartada");
+            }
+        } catch(e) { 
+            console.error("Error al descargar conversación:", e); 
+        }
+        
         document.getElementById('statusMessage').innerText = "Cortando conexión...";
         try {
             await fetch('/hangup', { method: 'POST' });
