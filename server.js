@@ -92,7 +92,7 @@ let ultimoTipo = null;
 function guardarFragmento(tipo, fragmento) {
     if (tipo === 'proveedor') {
         bufferProveedor += fragmento;
-        if (/[.!?;:]\s*$/.test(bufferProveedor) || bufferProveedor.length > 150) {
+        if (/[.!?;:]\s*$/.test(bufferProveedor)) {
             conversacionTemporal.push({
                 timestamp: new Date().toISOString(),
                 tipo: 'proveedor',
@@ -102,7 +102,7 @@ function guardarFragmento(tipo, fragmento) {
         }
     } else if (tipo === 'tu') {
         bufferTu += fragmento;
-        if (/[.!?;:]\s*$/.test(bufferTu) || bufferTu.length > 150) {
+        if (/[.!?;:]\s*$/.test(bufferTu)) {
             conversacionTemporal.push({
                 timestamp: new Date().toISOString(),
                 tipo: 'tu',
@@ -114,22 +114,25 @@ function guardarFragmento(tipo, fragmento) {
 }
 
 function finalizarConversacion() {
-    if (bufferProveedor.trim()) {
+    // Guardar lo que quede del proveedor
+    if (bufferProveedor && bufferProveedor.trim().length > 0) {
         conversacionTemporal.push({
             timestamp: new Date().toISOString(),
             tipo: 'proveedor',
             texto: bufferProveedor.trim()
         });
-        bufferProveedor = '';
     }
-    if (bufferTu.trim()) {
+    // Guardar lo que quede del usuario (tú)
+    if (bufferTu && bufferTu.trim().length > 0) {
         conversacionTemporal.push({
             timestamp: new Date().toISOString(),
             tipo: 'tu',
             texto: bufferTu.trim()
         });
-        bufferTu = '';
     }
+    // Limpiar siempre
+    bufferProveedor = '';
+    bufferTu = '';
 }
 
 app.get('/descargar-conversacion', (req, res) => {
